@@ -1,0 +1,48 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      OLLAMA_URL: http://ollama:11434/api/chat
+      TED_API_KEY: ${TED_API_KEY:-}
+      SQLSERVER_HOST: ${SQLSERVER_HOST:-10.141.1.8}
+      SQLSERVER_PORT: ${SQLSERVER_PORT:-1433}
+      SQLSERVER_DB: ${SQLSERVER_DB:-GP_NX_AGG}
+      SQLSERVER_USER: ${SQLSERVER_USER:-GPSCH}
+      SQLSERVER_PWD: ${SQLSERVER_PWD}
+      SQLSERVER_DRIVER: ${SQLSERVER_DRIVER:-ODBC Driver 18 for SQL Server}
+    volumes:
+      - app_data:/app/data
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  # Pull del modello al primo avvio, poi esce (restart: no)
+  ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: /bin/sh
+    command: -c "ollama pull ${OLLAMA_MODEL:-llama3.1:8b}"
+    restart: "no"
+
+volumes:
+  app_data:
+  ollama_data:

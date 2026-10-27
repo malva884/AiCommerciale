@@ -1,0 +1,6 @@
+[browser]
+# Nessuna telemetria inviata a Streamlit/Segment: dati 100% on-premise
+gatherUsageStats = false
+
+[server]
+port = 8501
