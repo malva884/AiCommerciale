@@ -28,11 +28,11 @@ def run(use_llm: bool = True):
     print(f"  nuove (non gia' in DB): {new_count}")
 
     print("== SCORING ==")
-    pending = db.unscored()
+    llm_on = use_llm and ollama_available()
+    pending = db.unscored(include_heuristic=llm_on)
     if not pending:
         print("  niente da valutare")
     else:
-        llm_on = use_llm and ollama_available()
         mode = "Ollama (LLM locale)" if llm_on else "euristico (fallback)"
         print(f"  {len(pending)} opportunita' da valutare - modalita': {mode}")
         for i, row in enumerate(pending, 1):

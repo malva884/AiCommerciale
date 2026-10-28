@@ -78,16 +78,19 @@ def insert_opportunity(item: dict) -> bool:
         return cur.rowcount > 0
 
 
-def unscored(limit: int = 200):
+def unscored(limit: int = 200, include_heuristic: bool = False):
     """Righe da (ri)classificare: mai valutate oppure senza settore assegnato.
 
     Le correzioni manuali da dashboard (sector valorizzato) non vengono toccate.
+    Con include_heuristic=True rivaluta anche le righe con solo scoring
+    euristico (fallback senza LLM), promuovendole a valutazione LLM.
     """
+    extra = " OR scored_by='heuristic'" if include_heuristic else ""
     with _connect() as conn:
         return conn.execute(
-            """SELECT id, title, text, country, area_manager
+            f"""SELECT id, title, text, country, area_manager
                FROM opportunities
-               WHERE score IS NULL OR sector IS NULL
+               WHERE score IS NULL OR sector IS NULL{extra}
                LIMIT ?""",
             (limit,),
         ).fetchall()
