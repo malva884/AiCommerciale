@@ -479,7 +479,7 @@ with tab4:
             "categories", "cross_sell_opportunity", "recommended_action"
         ]].copy()
 
-        display_df.rename(columns={
+        display_df = display_df.rename(columns={
             "client_id": "Codice",
             "client_name": "Ragione Sociale",
             "country": "Paese",
@@ -492,7 +492,7 @@ with tab4:
             "categories": "Categorie Storiche",
             "cross_sell_opportunity": "Potenziale Cross-Selling",
             "recommended_action": "Azione Suggerita per il Commerciale",
-        }, inplace=True)
+        })
 
         st.dataframe(
             display_df.style.format({
@@ -500,7 +500,7 @@ with tab4:
                 "MTBO (gg)": "{:.1f}",
                 "Indice Ritardo": "{:.2f}x",
             }, na_rep="-"),
-            use_container_width=True,
+            width="stretch",
             height=380,
         )
 
@@ -584,7 +584,7 @@ with tab4:
                             "Fatturato Totale (€)": "€{:,.2f}",
                             "Q.tà Totale": "{:,.2f}",
                         }, na_rep="-"),
-                        use_container_width=True,
+                        width="stretch",
                         height=200,
                     )
 
@@ -607,7 +607,7 @@ with tab4:
                         "Importo (€)": "€{:,.2f}",
                         "Q.tà Ordinata": "{:,.2f}",
                     }, na_rep="-"),
-                    use_container_width=True,
+                    width="stretch",
                     height=260,
                 )
 
