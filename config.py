@@ -118,14 +118,11 @@ TED_CPV_CODES = [
     "31300000",  # Fili e cavi isolati
     "31310000",  # Cavi di comunicazione e accessori
     "31311000",  # Cavi telefonici
-    "31315000",  # Cavi di trasmissione dati
     "31320000",  # Cavi di distribuzione elettrica
     "31330000",  # Cavi coassiali
     "31340000",  # Cavi speciali
     "31350000",  # Cavi elettrici schermati
     "32562000",  # Cavi a fibre ottiche
-    "32563000",  # Cavi in fibra ottica per trasmissione informazioni
-    "34933100",  # Segnali ferroviari
     "34934000",  # Attrezzatura di comando, controllo, comunicazione e segnalamento
     "45314300",  # Installazione di infrastrutture di cablaggio
 ]
