@@ -184,7 +184,7 @@ SQLSERVER_HOST = os.environ.get("SQLSERVER_HOST", "10.141.1.8")
 SQLSERVER_PORT = int(os.environ.get("SQLSERVER_PORT", "1433"))
 SQLSERVER_DB = os.environ.get("SQLSERVER_DB", "GP_NX_AGG")
 SQLSERVER_USER = os.environ.get("SQLSERVER_USER", "GPSCH")
-SQLSERVER_PWD = os.environ.get("SQLSERVER_PWD", "GPSCH")
+SQLSERVER_PWD = os.environ.get("SQLSERVER_PWD", "")
 SQLSERVER_DRIVER = os.environ.get("SQLSERVER_DRIVER", "ODBC Driver 18 for SQL Server")
 SQLSERVER_DB_URL = os.environ.get(
     "SQLSERVER_DB_URL",
