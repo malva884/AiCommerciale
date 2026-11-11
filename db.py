@@ -34,6 +34,19 @@ CREATE TABLE IF NOT EXISTS company_info (
     info_json    TEXT NOT NULL,
     fetched_at   TEXT NOT NULL
 );
+
+-- Storico errori di raccolta dati (fonti non raggiungibili, API, parse)
+CREATE TABLE IF NOT EXISTS fetch_errors (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          TEXT NOT NULL,              -- timestamp ISO dell'errore
+    source      TEXT NOT NULL,              -- news | ted | ted_award | wikidata | erp | ollama | pipeline
+    target      TEXT,                       -- query, nome azienda, contesto
+    url         TEXT,                       -- indirizzo non raggiungibile
+    error_type  TEXT,                       -- http_error | timeout | connection | parse | unexpected
+    message     TEXT,
+    resolved    INTEGER NOT NULL DEFAULT 0, -- 1 = sistemato/riconosciuto
+    resolved_at TEXT
+);
 """
 
 
@@ -185,3 +198,80 @@ def companies_missing_info(limit: int = 50):
                LIMIT ?""",
             (limit,),
         ).fetchall()]
+
+
+# ----------------------------------------------------------------------------
+# STORICO ERRORI DI RACCOLTA
+# ----------------------------------------------------------------------------
+
+def log_error(source: str, target: str | None = None,
+              url: str | None = None, error_type: str | None = None,
+              message: str | None = None):
+    """Storicizza un errore di fetch/enrichment.
+
+    Dedup: se lo stesso errore (source+url+message) e' gia' presente e non
+    ancora risolto non viene duplicato, aggiorna solo il timestamp.
+    Non solleva mai eccezioni: il log non deve bloccare la pipeline.
+    """
+    try:
+        now = datetime.now().isoformat(timespec="seconds")
+        with _connect() as conn:
+            dup = conn.execute(
+                """SELECT id FROM fetch_errors
+                   WHERE resolved=0 AND source IS ? AND url IS ?
+                         AND message IS ?""",
+                (source, url, message),
+            ).fetchone()
+            if dup:
+                conn.execute("UPDATE fetch_errors SET ts=? WHERE id=?",
+                             (now, dup["id"]))
+                return
+            conn.execute(
+                """INSERT INTO fetch_errors
+                   (ts, source, target, url, error_type, message)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (now, source, target, url, error_type,
+                 (message or "")[:500]),
+            )
+    except Exception:
+        pass
+
+
+def get_error_log(include_resolved: bool = False,
+                  limit: int = 500) -> list:
+    """Errori di raccolta, dal piu' recente."""
+    where = "" if include_resolved else "WHERE resolved=0"
+    with _connect() as conn:
+        return conn.execute(
+            f"""SELECT id, ts, source, target, url, error_type, message,
+                       resolved, resolved_at
+                FROM fetch_errors {where}
+                ORDER BY ts DESC, id DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+
+
+def unresolved_error_count() -> int:
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) FROM fetch_errors WHERE resolved=0"
+        ).fetchone()[0]
+
+
+def mark_errors_resolved(ids: list[int]):
+    """Segna errori come sistemati."""
+    if not ids:
+        return
+    now = datetime.now().isoformat(timespec="seconds")
+    with _connect() as conn:
+        conn.executemany(
+            "UPDATE fetch_errors SET resolved=1, resolved_at=? WHERE id=?",
+            [(now, i) for i in ids],
+        )
+
+
+def delete_resolved_errors() -> int:
+    """Elimina definitivamente gli errori segnati come risolti."""
+    with _connect() as conn:
+        cur = conn.execute("DELETE FROM fetch_errors WHERE resolved=1")
+        return cur.rowcount

@@ -44,19 +44,21 @@ def load_cached_erp_periodicity() -> pd.DataFrame:
         df_ord = sso.fetch_raw_orders()
         if not df_ord.empty:
             return calculate_customer_periodicity(df_ord)
-    except Exception:
-        pass
+    except Exception as exc:
+        db.log_error("erp", target="ordini ERP SQL Server",
+                     error_type=type(exc).__name__, message=str(exc))
     return pd.DataFrame()
 
 st.title("⚡ Co-Pilota Commerciale AI - Cavi Speciali B2B")
 st.caption("Intelligence Europea, Analisi Capitolati (RFP), Account Dossier, CRM Storico & New Business Lookalike — Dati 100% On-Premise.")
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "🎯 Tender Intelligence & News",
     "📄 RFP & Capitolati Analyzer",
     "🏢 Account Research & Dossier",
     "📊 CRM & Retention Ordini",
     "🚀 New Business & Lookalike UE",
+    "🛠️ Log Errori",
 ])
 
 
@@ -771,9 +773,77 @@ with tab5:
 
 
 # ==============================================================================
+# TAB 6: LOG ERRORI DI RACCOLTA
+# ==============================================================================
+with tab6:
+    st.subheader("🛠️ Storico Errori di Raccolta")
+    st.caption("Errori da sistemare: indirizzi non raggiungibili, API in errore, "
+               "feed malformati, fonti saltate. Gli errori risolti si possono "
+               "eliminare dallo storico.")
+
+    show_resolved = st.toggle("Mostra anche gli errori risolti", value=False)
+    err_rows = db.get_error_log(include_resolved=show_resolved)
+
+    if not err_rows:
+        st.success("✅ Nessun errore registrato" +
+                   (" nella vista corrente." if show_resolved else " — tutto ok."))
+    else:
+        df_err = pd.DataFrame([dict(r) for r in err_rows])
+
+        k1, k2, k3 = st.columns(3)
+        k1.metric("Errori in vista", len(df_err))
+        k2.metric("Non risolti",
+                  int((df_err["resolved"] == 0).sum()))
+        k3.metric("Fonti coinvolte", df_err["source"].nunique())
+
+        sel_sources = st.multiselect(
+            "Filtra per fonte",
+            sorted(df_err["source"].unique().tolist()),
+            default=[],
+            placeholder="Tutte le fonti")
+        if sel_sources:
+            df_err = df_err[df_err["source"].isin(sel_sources)]
+
+        st.dataframe(
+            df_err[["id", "ts", "source", "target", "url",
+                    "error_type", "message", "resolved"]],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "id": st.column_config.NumberColumn("ID", width="small"),
+                "ts": st.column_config.DatetimeColumn("Data", format="DD/MM/YY HH:mm"),
+                "source": st.column_config.TextColumn("Fonte", width="small"),
+                "target": st.column_config.TextColumn("Contesto"),
+                "url": st.column_config.LinkColumn("URL", display_text="link"),
+                "error_type": st.column_config.TextColumn("Tipo", width="small"),
+                "message": st.column_config.TextColumn("Messaggio"),
+                "resolved": st.column_config.CheckboxColumn("Risolto", width="small"),
+            },
+        )
+
+        c1, c2 = st.columns([3, 1])
+        with c1:
+            ids_open = df_err.loc[df_err["resolved"] == 0, "id"].tolist()
+            ids_sel = st.multiselect("ID da segnare come risolti", ids_open)
+            if st.button("✔️ Segna risolti", disabled=not ids_sel):
+                db.mark_errors_resolved(ids_sel)
+                st.rerun()
+        with c2:
+            n_res = int((df_err["resolved"] == 1).sum())
+            if st.button(f"🗑️ Elimina risolti ({n_res})",
+                         disabled=n_res == 0):
+                db.delete_resolved_errors()
+                st.rerun()
+
+
+# ==============================================================================
 # SIDEBAR REFRESH ACTION
 # ==============================================================================
 st.sidebar.divider()
+_n_err = db.unresolved_error_count()
+if _n_err:
+    st.sidebar.warning(f"⚠️ {_n_err} errori di raccolta non risolti — "
+                       "vedi tab '🛠️ Log Errori'")
 st.sidebar.subheader("⚙️ Aggiornamento Dati")
 if st.sidebar.button("🚀 Aggiorna Fonti & Pipeline"):
     with st.spinner("Raccolta bandi TED & News europee in corso..."):

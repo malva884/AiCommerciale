@@ -8,6 +8,7 @@ import os
 
 import requests
 
+import db
 from config import (TED_API_URL, TED_COUNTRIES, TED_CPV_CODES,
                     TED_KEYWORDS, TED_MAX_RESULTS, COUNTRY_TO_AREA)
 
@@ -61,12 +62,23 @@ def fetch_ted(verbose: bool = True) -> list[dict]:
         )
         resp.raise_for_status()
     except requests.RequestException as exc:
+        db.log_error("ted", target="ricerca bandi attivi",
+                     url=TED_API_URL,
+                     error_type=type(exc).__name__, message=str(exc))
         if verbose:
             print(f"  [ted] errore API: {exc}")
         return []
 
+    try:
+        notices = resp.json().get("notices", [])
+    except ValueError as exc:
+        db.log_error("ted", target="ricerca bandi attivi",
+                     url=TED_API_URL, error_type="parse",
+                     message=f"JSON non valido: {exc}")
+        return []
+
     items = []
-    for notice in resp.json().get("notices", []):
+    for notice in notices:
         pub_num = notice.get("publication-number", "")
         country = _flatten(notice.get("place-of-performance-country-lot"))
         if not country or len(country) != 3:

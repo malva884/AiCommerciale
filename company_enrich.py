@@ -13,6 +13,8 @@ import time
 
 import requests
 
+import db
+
 _API = "https://www.wikidata.org/w/api.php"
 _HEADERS = {"User-Agent": "SalesAgentCommerciale/1.0 (progetto interno)"}
 _TIMEOUT = 15
@@ -46,12 +48,21 @@ def _get(params: dict, retries: int = 3) -> dict:
             r = requests.get(_API, params=params, headers=_HEADERS,
                              timeout=_TIMEOUT)
             if r.status_code == 429:
+                if attempt == retries - 1:
+                    db.log_error("wikidata",
+                                 target=params.get("search") or params.get("ids"),
+                                 url=_API, error_type="http_error",
+                                 message="HTTP 429 rate limit")
                 time.sleep(2 * (attempt + 1))
                 continue
             r.raise_for_status()
             return r.json()
         except requests.RequestException as exc:
             if attempt == retries - 1:
+                db.log_error("wikidata",
+                             target=params.get("search") or params.get("ids"),
+                             url=_API, error_type=type(exc).__name__,
+                             message=str(exc))
                 print(f"  [enrich] errore API Wikidata: {exc}")
             else:
                 time.sleep(1.5 * (attempt + 1))

@@ -21,7 +21,15 @@ def run(use_llm: bool = True):
     db.init_db()
 
     print("== FETCH FONTI ==")
-    items = fetch_news() + fetch_ted() + fetch_ted_awards()
+    items = []
+    for source, fetch in (("news", fetch_news), ("ted", fetch_ted),
+                          ("ted_award", fetch_ted_awards)):
+        try:
+            items += fetch()
+        except Exception as exc:  # errore imprevisto nel fetcher
+            db.log_error(source, target="pipeline fetch",
+                         error_type=type(exc).__name__, message=str(exc))
+            print(f"  [{source}] errore imprevisto: {exc}")
     print(f"  trovate {len(items)} voci totali")
 
     new_count = sum(db.insert_opportunity(it) for it in items)

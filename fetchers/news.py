@@ -4,6 +4,7 @@ from html import unescape
 
 import feedparser
 
+import db
 from config import NEWS_EDITIONS, MAX_NEWS_PER_QUERY
 
 _RSS = "https://news.google.com/rss/search?q={q}&hl={hl}&gl={gl}&ceid={ceid}"
@@ -27,11 +28,32 @@ def fetch_news(verbose: bool = True) -> list[dict]:
 def _fetch_query(query: str, lang: str, country: str,
                  seen: set, verbose: bool) -> list[dict]:
     results = []
+    url = _feed_url(query, lang, country)
     try:
-        feed = feedparser.parse(_feed_url(query, lang, country))
+        feed = feedparser.parse(url)
     except Exception as exc:  # rete non disponibile, feed malformato, ecc.
+        db.log_error("news", target=query, url=url,
+                     error_type=type(exc).__name__, message=str(exc))
         if verbose:
             print(f"  [news] errore query '{query}': {exc}")
+        return results
+    # Indirizzo non raggiungibile o feed corrotto: feedparser non solleva
+    # eccezioni, espone status HTTP e flag 'bozo'.
+    status = getattr(feed, "status", None)
+    if status is not None and status >= 400:
+        db.log_error("news", target=query, url=url,
+                     error_type="http_error",
+                     message=f"HTTP {status}")
+        if verbose:
+            print(f"  [news] HTTP {status} su query '{query}'")
+        return results
+    if getattr(feed, "bozo", False) and not feed.entries:
+        db.log_error("news", target=query, url=url,
+                     error_type="parse",
+                     message=str(feed.bozo_exception))
+        if verbose:
+            print(f"  [news] feed malformato su query '{query}': "
+                  f"{feed.bozo_exception}")
         return results
     for entry in feed.entries[:MAX_NEWS_PER_QUERY]:
         link = entry.get("link", "")
