@@ -231,7 +231,16 @@ def _score_heuristic(title: str, text: str, country_hint: str | None = None) -> 
 
 
 def score_opportunity(title: str, text: str, country_hint: str | None = None) -> dict:
-    """LLM locale se disponibile, altrimenti euristico."""
+    """LLM locale se disponibile, altrimenti euristico.
+
+    Ottimizzazione CPU: se l'euristica identifica subito l'articolo come rumore
+    (cronaca, polemiche, nessun intent commerciale - score 0), scarta direttamente
+    senza interpellare Ollama, risparmiando minuti preziosi su macchine senza GPU.
+    """
+    quick = _score_heuristic(title, text, country_hint)
+    if quick.get("score", 0) == 0 and quick.get("scored_by") == "heuristic_filtered":
+        return quick
+
     result = _score_ollama(title, text, country_hint)
-    return result if result else _score_heuristic(title, text, country_hint)
+    return result if result else quick
 

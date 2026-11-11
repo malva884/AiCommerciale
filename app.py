@@ -852,7 +852,7 @@ if st.sidebar.button("🚀 Aggiorna Fonti & Pipeline"):
             _main_py = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     "main.py")
             proc = subprocess.run([sys.executable, _main_py],
-                                  capture_output=True, text=True, timeout=1800)
+                                  capture_output=True, text=True, timeout=7200)
             st.session_state["pipeline_rc"] = proc.returncode
             st.session_state["pipeline_out"] = proc.stdout or ""
             st.session_state["pipeline_err"] = proc.stderr or ""
@@ -860,7 +860,7 @@ if st.sidebar.button("🚀 Aggiorna Fonti & Pipeline"):
             st.session_state["pipeline_rc"] = -1
             st.session_state["pipeline_out"] = ""
             st.session_state["pipeline_err"] = (
-                "Timeout: la pipeline ha superato i 30 minuti.")
+                "Timeout: la pipeline ha superato le 2 ore.")
     st.rerun()
 
 if "pipeline_rc" in st.session_state:
