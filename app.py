@@ -1,5 +1,6 @@
 """Dashboard Co-Pilota Commerciale AI B2B - Cavi Speciali (Fibra & Rame)."""
 import io
+import os
 import re
 import sqlite3
 import subprocess
@@ -848,7 +849,9 @@ st.sidebar.subheader("⚙️ Aggiornamento Dati")
 if st.sidebar.button("🚀 Aggiorna Fonti & Pipeline"):
     with st.spinner("Raccolta bandi TED & News europee in corso..."):
         try:
-            proc = subprocess.run([sys.executable, "main.py"],
+            _main_py = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "main.py")
+            proc = subprocess.run([sys.executable, _main_py],
                                   capture_output=True, text=True, timeout=1800)
             st.session_state["pipeline_rc"] = proc.returncode
             st.session_state["pipeline_out"] = proc.stdout or ""

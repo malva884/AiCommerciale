@@ -176,7 +176,8 @@ KEYWORD_SCORE = {
     "siemens": 15, "hitachi": 20, "webuild": 20, "pizzarotti": 15, "ghella": 15,
 }
 
-DB_PATH = "data/opportunita.db"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "data", "opportunita.db")
 
 # --- Connessione SQL Server ERP (Sola Lettura) ---
 # Ripresa dalla configurazione del progetto ARGUS
