@@ -90,14 +90,29 @@ def _company_brief(info: dict) -> str:
 with tab1:
     def load_data() -> pd.DataFrame:
         with sqlite3.connect(DB_PATH) as conn:
-            return pd.read_sql_query(
+            df = pd.read_sql_query(
                 """SELECT id, source, title, url, published, text, country,
                           area_manager, score, sector, target_company, norms,
                           motivation, action, email_draft, scored_by, created_at
-                   FROM opportunities
-                   ORDER BY score DESC, id DESC""",
+                   FROM opportunities""",
                 conn,
             )
+        pub = pd.to_datetime(
+            df["published"], format="mixed", errors="coerce", utc=True
+        )
+        # Fallback: date TED con offset senza orario (es. "2016-12-20+01:00")
+        nat = pub.isna() & df["published"].notna()
+        if nat.any():
+            pub.loc[nat] = pd.to_datetime(
+                df.loc[nat, "published"].str[:10], errors="coerce", utc=True
+            )
+        df["_pub_dt"] = pub
+        return df.sort_values(
+            ["_pub_dt", "score", "id"],
+            ascending=[False, False, False],
+            na_position="last",
+            kind="mergesort",
+        )
 
     df_all = load_data()
 
