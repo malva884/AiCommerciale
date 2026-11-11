@@ -847,12 +847,27 @@ if _n_err:
 st.sidebar.subheader("⚙️ Aggiornamento Dati")
 if st.sidebar.button("🚀 Aggiorna Fonti & Pipeline"):
     with st.spinner("Raccolta bandi TED & News europee in corso..."):
-        proc = subprocess.run([sys.executable, "main.py"],
-                              capture_output=True, text=True, timeout=1800)
-    if proc.returncode == 0:
+        try:
+            proc = subprocess.run([sys.executable, "main.py"],
+                                  capture_output=True, text=True, timeout=1800)
+            st.session_state["pipeline_rc"] = proc.returncode
+            st.session_state["pipeline_out"] = proc.stdout or ""
+            st.session_state["pipeline_err"] = proc.stderr or ""
+        except subprocess.TimeoutExpired:
+            st.session_state["pipeline_rc"] = -1
+            st.session_state["pipeline_out"] = ""
+            st.session_state["pipeline_err"] = (
+                "Timeout: la pipeline ha superato i 30 minuti.")
+    st.rerun()
+
+if "pipeline_rc" in st.session_state:
+    if st.session_state["pipeline_rc"] == 0:
         st.sidebar.success("Pipeline completata con successo!")
     else:
-        st.sidebar.error("Errore durante l'esecuzione.")
-    st.rerun()
+        st.sidebar.error("Errore durante l'esecuzione della pipeline.")
+    with st.sidebar.expander("📋 Output ultima pipeline"):
+        st.code(st.session_state["pipeline_out"][-4000:] or "(nessun output)")
+        if st.session_state["pipeline_err"]:
+            st.code(st.session_state["pipeline_err"][-2000:])
 
 

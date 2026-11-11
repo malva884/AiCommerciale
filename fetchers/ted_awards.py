@@ -18,6 +18,8 @@ def fetch_ted_awards(verbose: bool = True) -> list[dict]:
     """Aggiudicazioni UE: il campo winner-name = azienda cliente potenziale."""
     api_key = os.environ.get("TED_API_KEY")
     if not api_key:
+        db.log_error("ted_award", target="config", error_type="config",
+                     message="TED_API_KEY non impostata nel container: fonte aggiudicazioni saltata")
         if verbose:
             print("  [ted-award] TED_API_KEY non impostata, fonte saltata.")
         return []

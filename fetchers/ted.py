@@ -31,6 +31,8 @@ def _flatten(value) -> str:
 def fetch_ted(verbose: bool = True) -> list[dict]:
     api_key = os.environ.get("TED_API_KEY")
     if not api_key:
+        db.log_error("ted", target="config", error_type="config",
+                     message="TED_API_KEY non impostata nel container: fonte TED saltata")
         if verbose:
             print("  [ted] TED_API_KEY non impostata, fonte saltata.")
         return []
