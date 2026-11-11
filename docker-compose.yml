@@ -4,6 +4,8 @@ services:
     ports:
       - "8501:8501"
     environment:
+      TZ: Europe/Rome
+      PYTHONUNBUFFERED: "1"
       OLLAMA_URL: http://ollama:11434/api/chat
       TED_API_KEY: ${TED_API_KEY:-}
       SQLSERVER_HOST: ${SQLSERVER_HOST:-10.141.1.8}
@@ -19,12 +21,14 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # Worker notturno in background: esegue main.py ogni notte (default 01:00)
+  # Worker notturno in background: esegue main.py ogni notte (default 01:00 ora italiana)
   # e popola il DB SQLite condiviso (app_data) senza bloccare l'interfaccia.
   scheduler:
     build: .
     command: ["python", "scheduler.py"]
     environment:
+      TZ: Europe/Rome
+      PYTHONUNBUFFERED: "1"
       OLLAMA_URL: http://ollama:11434/api/chat
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
       TED_API_KEY: ${TED_API_KEY:-}
