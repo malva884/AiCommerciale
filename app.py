@@ -12,6 +12,7 @@ import streamlit as st
 
 import db
 import config
+import ui_style
 from account_research import generate_account_dossier
 from company_enrich import enrich_company, format_amount
 from config import AREA_MAPPING, DB_PATH, SECTORS
@@ -62,8 +63,9 @@ def load_cached_erp_periodicity() -> pd.DataFrame:
                      error_type=type(exc).__name__, message=str(exc))
     return pd.DataFrame()
 
-st.title("⚡ Co-Pilota Commerciale AI - Cavi Speciali B2B")
-st.caption("Intelligence Europea, Analisi Capitolati (RFP), Account Dossier, CRM Storico & New Business Lookalike — Supporto AI Locale & Cloud.")
+ui_style.inject_styles()
+ui_style.hero()
+ui_style.agent_cards()
 
 # ==============================================================================
 # SIDEBAR: RIMANDO CONFIG MOTORE AI (TAB ADMIN)
@@ -903,8 +905,8 @@ with tab6:
         ("SQLSERVER_PWD", _mask_secret(config.SQLSERVER_PWD), "env"),
         ("NIGHTLY_SCHEDULE_TIME", os.environ.get("NIGHTLY_SCHEDULE_TIME", "01:00"), "env"),
         ("DB_PATH", DB_PATH, "config.py"),
-    ], columns=["Parametro", "Valore", "Fonte"]),
-        use_container_width=True, hide_index=True)
+    ], columns=["Parametro", "Valore", "Fonte"]).astype(str),
+        width="stretch", hide_index=True)
 
     st.markdown("**\U0001f511 Quota Gemini per chiave**")
     _usage = gemini_key_usage()
@@ -920,7 +922,7 @@ with tab6:
                           else "\U0001f7e2 attiva"),
             }
             for u in _usage
-        ]), use_container_width=True, hide_index=True)
+        ]), width="stretch", hide_index=True)
     else:
         st.caption("Nessuna chiave Gemini configurata.")
 
@@ -1046,7 +1048,7 @@ with tab6:
         st.dataframe(
             df_err[["id", "ts", "source", "target", "url",
                     "error_type", "message", "resolved"]],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "id": st.column_config.NumberColumn("ID", width="small"),
