@@ -6,7 +6,7 @@ ordini per un produttore di cavi in fibra ottica e rame.
 
 **Motore AI (LLM)**: Supporto ibrido flessibile:
 - **Locale (Ollama)**: 100% on-premise e privacy (`llama3.1:8b`, `mistral:7b`).
-- **Cloud Aziendale (Google Gemini)**: massima accuratezza e velocità (`gemini-2.0-flash`, `gemini-1.5-flash`, `gemini-1.5-pro`).
+- **Cloud Aziendale (Google Gemini)**: massima accuratezza e velocità (`gemini-3.1-flash-lite`, `gemini-3.5-flash`, `gemini-3.6-flash`).
 - **Fallback Euristico**: parole chiave e scoring deterministico se nessun LLM è online.
 
 La scelta del provider può essere effettuata:

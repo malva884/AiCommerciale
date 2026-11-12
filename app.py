@@ -86,10 +86,10 @@ if selected_provider == "gemini":
     )
     st.session_state["gemini_api_key"] = gemini_key_input
 
-    gemini_models = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite",
+    gemini_models = ["gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3.6-flash",
                      "gemini-3.8-flash", "gemini-3.7-flash", "gemini-flash-latest",
                      "gemini-pro-latest"]
-    current_model = config.GEMINI_MODEL if config.GEMINI_MODEL in gemini_models else "gemini-3.6-flash"
+    current_model = config.GEMINI_MODEL if config.GEMINI_MODEL in gemini_models else "gemini-3.1-flash-lite"
     selected_gemini_model = st.sidebar.selectbox(
         "Modello Gemini",
         gemini_models,

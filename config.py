@@ -14,7 +14,7 @@ OLLAMA_TIMEOUT = 120              # secondi per risposta
 
 # --- LLM cloud aziendale (Google Gemini) ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")  # es: gemini-3.6-flash, gemini-3.5-flash, gemini-3.1-flash-lite
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-lite")  # es: gemini-3.1-flash-lite, gemini-3.5-flash, gemini-3.6-flash
 GEMINI_TIMEOUT = int(os.environ.get("GEMINI_TIMEOUT", "60"))       # secondi per risposta
 # Interactions API (nuova API Gemini; l'endpoint generateContent e' legacy)
 GEMINI_API_URL = os.environ.get(
