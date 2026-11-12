@@ -64,7 +64,6 @@ def load_cached_erp_periodicity() -> pd.DataFrame:
     return pd.DataFrame()
 
 ui_style.inject_styles()
-ui_style.hero()
 
 # ==============================================================================
 # SIDEBAR: RIMANDO CONFIG MOTORE AI (TAB ADMIN)
@@ -82,7 +81,8 @@ _SECTIONS = [
     "🔧 Admin & Logs",
 ]
 st.session_state.setdefault("nav_section", _SECTIONS[0])
-st.sidebar.markdown("**🧭 NAVIGAZIONE**")
+ui_style.brand()
+st.sidebar.markdown("**NAVIGAZIONE**")
 section = st.sidebar.radio("Sezioni", _SECTIONS, key="nav_section",
                            label_visibility="collapsed")
 
@@ -122,16 +122,26 @@ else:
 
 
 # ==============================================================================
-# SEZIONE PANORAMICA (home: agent cards + KPI stile Metriks)
+# HEADER PAGINA (titolo + sottotitolo per sezione, stile Metriks)
+# ==============================================================================
+ui_style.page_header(section)
+
+
+# ==============================================================================
+# SEZIONE PANORAMICA (home: KPI tiles + agent cards stile Metriks)
 # ==============================================================================
 if section == _SECTIONS[0]:
-    ui_style.agent_cards()
-    _h1, _h2, _h3, _h4 = st.columns(4)
     _stats = db.stats()
-    _h1.metric("Opportunita' in DB", _stats["total"])
-    _h2.metric("Valutate AI", _stats["scored"])
-    _h3.metric("Chiamate Gemini oggi", db.llm_calls_today())
-    _h4.metric("Errori aperti", db.unresolved_error_count())
+    ui_style.kpi_tiles([
+        ("\U0001f3af", "Opportunita' nel DB", _stats["total"], "database SQLite locale"),
+        ("\U0001f916", "Valutate AI", _stats["scored"], "scoring LLM completato"),
+        ("\u2601\ufe0f", "Chiamate Gemini oggi", db.llm_calls_today(),
+         f"budget {config.GEMINI_DAILY_LIMIT} per chiave"),
+        ("\U0001f6e0\ufe0f", "Errori aperti", db.unresolved_error_count(),
+         "raccolta da verificare"),
+    ])
+    st.markdown("**Agenti della suite**")
+    ui_style.agent_cards()
 
 
 # ==============================================================================
