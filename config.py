@@ -4,6 +4,24 @@ Mercato: Europa (con suddivisione per Area Manager).
 """
 import os
 
+
+def _load_dotenv(path: str):
+    """Loader .env minimale (no dipendenze): KEY=VALUE per riga, ignora # e vuote.
+    Non sovrascrive variabili gia' presenti nell'ambiente di sistema."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+    except OSError:
+        pass
+
+
+_load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+
 # --- Configurazione Provider LLM (Ollama locale o Gemini aziendale) ---
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama").lower()  # "ollama" | "gemini"
 

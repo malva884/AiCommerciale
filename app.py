@@ -93,6 +93,37 @@ def _goto(section_label: str):
     st.session_state["nav_section"] = section_label
 
 
+_ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+
+
+def _env_set(key: str, value: str):
+    """Persiste una variabile nel file .env locale (update o append)."""
+    lines = []
+    if os.path.exists(_ENV_PATH):
+        with open(_ENV_PATH, encoding="utf-8") as f:
+            lines = f.readlines()
+    prefix = f"{key}="
+    for i, line in enumerate(lines):
+        if line.strip().startswith(prefix):
+            lines[i] = f"{key}={value}\n"
+            break
+    else:
+        lines.append(f"{key}={value}\n")
+    with open(_ENV_PATH, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+
+
+def _persist_gemini_keys():
+    """on_change dei campi chiave Gemini: salva su .env cosi' le chiavi
+    sopravvivono al refresh pagina e al riavvio dell'app."""
+    _env_set("GEMINI_API_KEY",
+             st.session_state.get("gemini_api_key", "").strip())
+    _env_set("GEMINI_API_KEYS",
+             ",".join(k.strip() for k in re.split(
+                 r"[,\s]+", st.session_state.get("gemini_extra_keys", ""))
+                 if k.strip()))
+
+
 # ==============================================================================
 # STATO MOTORE AI: eseguito a OGNI rerun (letto da session_state, non dai widget)
 # ==============================================================================
@@ -104,7 +135,8 @@ gemini_models = ["gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3.6-flash"
 st.session_state.setdefault("provider_radio",
                             llm_options[1] if config.LLM_PROVIDER == "gemini" else llm_options[0])
 st.session_state.setdefault("gemini_api_key", config.GEMINI_API_KEY)
-st.session_state.setdefault("gemini_extra_keys", "")
+st.session_state.setdefault("gemini_extra_keys",
+                            ",".join(config.GEMINI_API_KEYS))
 st.session_state.setdefault("gemini_model_sel",
                             config.GEMINI_MODEL if config.GEMINI_MODEL in gemini_models
                             else "gemini-3.1-flash-lite")
@@ -363,12 +395,14 @@ if section == _SECTIONS[6]:
             "Gemini API Key Aziendale",
             type="password",
             key="gemini_api_key",
-            help="Inserisci la chiave API aziendale di Google Gemini (AI Studio o Vertex AI)."
+            on_change=_persist_gemini_keys,
+            help="Inserisci la chiave API aziendale di Google Gemini (AI Studio o Vertex AI). Salvata su .env: sopravvive a refresh e riavvio."
         )
         _k2.text_input(
             "Chiavi extra rotazione (comma-separated)",
             type="password",
             key="gemini_extra_keys",
+            on_change=_persist_gemini_keys,
             help="Chiavi API aggiuntive da progetti diversi: quando una esaurisce la quota giornaliera, la successiva prende il suo posto."
         )
         st.selectbox("Modello Gemini", gemini_models, key="gemini_model_sel")
