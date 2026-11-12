@@ -25,10 +25,13 @@ from crm_analyzer import (
 )
 from llm import (
     gemini_available,
+    gemini_key_usage,
+    gemini_keys_count,
     get_active_provider,
     is_llm_available,
     ollama_available,
     set_active_provider,
+    set_gemini_keys,
 )
 from prospecting_engine import (
     LOOKALIKE_PROSPECTS_DB,
@@ -85,6 +88,13 @@ if selected_provider == "gemini":
         help="Inserisci la chiave API aziendale di Google Gemini (AI Studio o Vertex AI)."
     )
     st.session_state["gemini_api_key"] = gemini_key_input
+    gemini_extra_input = st.sidebar.text_input(
+        "Chiavi extra rotazione (comma-separated)",
+        value=st.session_state.get("gemini_extra_keys", ""),
+        type="password",
+        help="Chiavi API aggiuntive da progetti diversi: quando una esaurisce la quota giornaliera, la successiva prende il suo posto."
+    )
+    st.session_state["gemini_extra_keys"] = gemini_extra_input
 
     gemini_models = ["gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3.6-flash",
                      "gemini-3.8-flash", "gemini-3.7-flash", "gemini-flash-latest",
@@ -96,12 +106,22 @@ if selected_provider == "gemini":
         index=gemini_models.index(current_model),
     )
 
-    if gemini_key_input.strip():
-        st.sidebar.success(f"🟢 Gemini pronto ({selected_gemini_model})")
+    extra_keys = [k.strip() for k in re.split(r"[,\s]+", gemini_extra_input) if k.strip()]
+    ui_keys = ([gemini_key_input.strip()] if gemini_key_input.strip() else []) + extra_keys
+    set_gemini_keys(ui_keys)
+
+    n_keys = len(ui_keys) or gemini_keys_count()
+    if ui_keys or gemini_keys_count():
+        st.sidebar.success(f"🟢 Gemini pronto ({selected_gemini_model}) — {n_keys} chiavi attive")
     else:
-        st.sidebar.warning("⚠️ Inserisci la chiave API di Gemini")
+        st.sidebar.warning("⚠️ Inserisci almeno una chiave API di Gemini")
 
     set_active_provider("gemini", api_key=gemini_key_input, gemini_model=selected_gemini_model)
+
+    # Consumo quota odierna per chiave (rotazione)
+    for u in gemini_key_usage():
+        state = "🔴" if u["exhausted"] or u["calls"] >= config.GEMINI_DAILY_LIMIT else "🟢"
+        st.sidebar.caption(f"{state} Chiave `...{u['tail']}`: {u['calls']}/{config.GEMINI_DAILY_LIMIT} chiamate oggi")
 else:
     ollama_online = ollama_available()
     selected_ollama_model = st.sidebar.text_input(

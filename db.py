@@ -211,6 +211,14 @@ def llm_register_call(key_id: str = ""):
             (datetime.now().strftime("%Y-%m-%d"), key_id))
 
 
+def llm_usage_today() -> dict:
+    """Mappa key_id -> chiamate odierne (vista quota multi-chiave)."""
+    with _connect() as conn:
+        return {r[0]: r[1] for r in conn.execute(
+            "SELECT key_id, calls FROM llm_usage WHERE day=?",
+            (datetime.now().strftime("%Y-%m-%d"),)).fetchall()}
+
+
 def get_company_info(company_name: str) -> dict | None:
     """Scheda azienda dalla cache locale (None se mai arricchita)."""
     with _connect() as conn:

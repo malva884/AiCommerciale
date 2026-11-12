@@ -10,7 +10,7 @@ ordini per un produttore di cavi in fibra ottica e rame.
 - **Fallback Euristico**: parole chiave e scoring deterministico se nessun LLM è online.
 
 La scelta del provider può essere effettuata:
-1. Direttamente dall'interfaccia Streamlit nella sidebar (**🧠 Motore AI**), inserendo la chiave Gemini o selezionando Ollama.
+1. Direttamente dall'interfaccia Streamlit nella sidebar (**🧠 Motore AI**), inserendo una o piu' chiavi Gemini (rotazione con contatore d'uso per chiave) o selezionando Ollama.
 2. Tramite variabili d'ambiente (`LLM_PROVIDER=gemini` o `LLM_PROVIDER=ollama`, e `GEMINI_API_KEY="chiave"`).
 
 ## Setup

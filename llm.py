@@ -27,6 +27,7 @@ _RUNTIME_PROVIDER = None
 _RUNTIME_GEMINI_KEY = None
 _RUNTIME_GEMINI_MODEL = None
 _RUNTIME_OLLAMA_MODEL = None
+_RUNTIME_GEMINI_KEYS = []         # rotazione impostata da UI (set_gemini_keys)
 _GEMINI_KEYS_EXHAUSTED = set()   # key_id esauriti oggi (429 o budget)
 _LAST_GEMINI_CALL = 0.0           # timestamp ultima chiamata (pacing RPM)
 
@@ -43,6 +44,13 @@ def set_active_provider(provider: str, api_key: str | None = None,
         _RUNTIME_GEMINI_MODEL = gemini_model.strip()
     if ollama_model is not None:
         _RUNTIME_OLLAMA_MODEL = ollama_model.strip()
+
+
+def set_gemini_keys(keys):
+    """Imposta da UI la lista di chiavi Gemini per la rotazione.
+    Lista vuota -> si torna alle chiavi da variabili d'ambiente."""
+    global _RUNTIME_GEMINI_KEYS
+    _RUNTIME_GEMINI_KEYS = [k.strip() for k in keys if k and k.strip()]
 
 
 def get_active_provider() -> str:
@@ -138,13 +146,16 @@ def ollama_available() -> bool:
 
 
 def _gemini_keys(api_key: str | None = None) -> list[str]:
-    """Chiavi Gemini attive: esplicita (UI/script) oppure rotazione da env."""
-    explicit = api_key or _RUNTIME_GEMINI_KEY
-    if explicit and explicit.strip():
-        return [explicit.strip()]
+    """Chiavi attive: param esplicito > lista UI (set_gemini_keys) > env."""
+    if api_key and api_key.strip():
+        return [api_key.strip()]
+    if _RUNTIME_GEMINI_KEYS:
+        return list(dict.fromkeys(_RUNTIME_GEMINI_KEYS))
+    if _RUNTIME_GEMINI_KEY and _RUNTIME_GEMINI_KEY.strip():
+        return [_RUNTIME_GEMINI_KEY.strip()]
     keys = [GEMINI_API_KEY.strip()] if GEMINI_API_KEY.strip() else []
     keys += GEMINI_API_KEYS
-    return list(dict.fromkeys(keys))  # dedup preservando lordine
+    return list(dict.fromkeys(keys))  # dedup preservando l'ordine
 
 
 def _key_id(key: str) -> str:
@@ -155,6 +166,20 @@ def _key_id(key: str) -> str:
 def gemini_keys_count() -> int:
     """Numero di chiavi Gemini configurate (capacita' giornaliera totale)."""
     return len(_gemini_keys())
+
+
+def gemini_key_usage() -> list[dict]:
+    """Consumo odierno per ogni chiave configurata (vista quota in dashboard)."""
+    usage = db.llm_usage_today()
+    return [
+        {
+            "key_id": _key_id(k),
+            "tail": k[-4:],
+            "calls": usage.get(_key_id(k), 0),
+            "exhausted": _key_id(k) in _GEMINI_KEYS_EXHAUSTED,
+        }
+        for k in _gemini_keys()
+    ]
 
 
 def gemini_available(api_key: str | None = None) -> bool:
