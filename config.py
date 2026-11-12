@@ -26,10 +26,9 @@ def _load_dotenv(path: str):
         pass
 
 
-# Ordine: prima .env legacy (compatibilita'), poi le impostazioni UI
-# persistite sul volume dati Docker (app_data) — sopravvivono ai redeploy.
+# .env legacy (sviluppo locale / Coolify env-file). Le impostazioni salvate
+# dalla UI vivono nella tabella app_settings del DB, non qui.
 _load_dotenv(os.path.join(_BASE_DIR, ".env"))
-_load_dotenv(os.path.join(_BASE_DIR, "data", "llm_settings.env"))
 
 # --- Configurazione Provider LLM (Ollama locale o Gemini aziendale) ---
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama").lower()  # "ollama" | "gemini"

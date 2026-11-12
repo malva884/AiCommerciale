@@ -93,45 +93,25 @@ def _goto(section_label: str):
     st.session_state["nav_section"] = section_label
 
 
-_ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         "data", "llm_settings.env")
-
-
-def _env_set(key: str, value: str):
-    """Persiste una variabile in data/llm_settings.env (volume Docker
-    app_data: sopravvive a refresh, riavvio e redeploy Coolify)."""
-    lines = []
-    os.makedirs(os.path.dirname(_ENV_PATH), exist_ok=True)
-    if os.path.exists(_ENV_PATH):
-        with open(_ENV_PATH, encoding="utf-8") as f:
-            lines = f.readlines()
-    prefix = f"{key}="
-    for i, line in enumerate(lines):
-        if line.strip().startswith(prefix):
-            lines[i] = f"{key}={value}\n"
-            break
-    else:
-        lines.append(f"{key}={value}\n")
-    with open(_ENV_PATH, "w", encoding="utf-8") as f:
-        f.writelines(lines)
-
-
 def _persist_llm_settings():
     """on_change dei widget Motore AI: salva provider, chiavi, modelli e flag
-    fallback su .env — sopravvivono a refresh pagina e riavvio dell'app."""
+    fallback nella tabella app_settings del DB — sopravvivono a refresh,
+    riavvio e redeploy Coolify (il DB vive sul volume app_data)."""
     label = st.session_state.get("provider_radio", "")
-    _env_set("LLM_PROVIDER",
-             "gemini" if "Gemini" in label else "ollama")
-    _env_set("GEMINI_API_KEY",
-             st.session_state.get("gemini_api_key", "").strip())
-    _env_set("GEMINI_API_KEYS",
-             ",".join(k.strip() for k in re.split(
-                 r"[,\s]+", st.session_state.get("gemini_extra_keys", ""))
-                 if k.strip()))
-    _env_set("GEMINI_MODEL", st.session_state.get("gemini_model_sel", ""))
-    _env_set("OLLAMA_MODEL", st.session_state.get("ollama_model_sel", ""))
-    _env_set("DISABLE_OLLAMA_FALLBACK",
-             "1" if st.session_state.get("no_ollama_fallback") else "0")
+    db.set_setting("LLM_PROVIDER",
+                   "gemini" if "Gemini" in label else "ollama")
+    db.set_setting("GEMINI_API_KEY",
+                   st.session_state.get("gemini_api_key", "").strip())
+    db.set_setting("GEMINI_API_KEYS",
+                   ",".join(k.strip() for k in re.split(
+                       r"[,\s]+", st.session_state.get("gemini_extra_keys", ""))
+                       if k.strip()))
+    db.set_setting("GEMINI_MODEL",
+                   st.session_state.get("gemini_model_sel", ""))
+    db.set_setting("OLLAMA_MODEL",
+                   st.session_state.get("ollama_model_sel", ""))
+    db.set_setting("DISABLE_OLLAMA_FALLBACK",
+                   "1" if st.session_state.get("no_ollama_fallback") else "0")
 
 
 # ==============================================================================
@@ -142,17 +122,28 @@ gemini_models = ["gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3.6-flash"
                  "gemini-3.8-flash", "gemini-3.7-flash", "gemini-flash-latest",
                  "gemini-pro-latest"]
 
-st.session_state.setdefault("provider_radio",
-                            llm_options[1] if config.LLM_PROVIDER == "gemini" else llm_options[0])
-st.session_state.setdefault("gemini_api_key", config.GEMINI_API_KEY)
+# Priorita': impostazioni salvate dalla UI nel DB > env var > default codice
+_db_provider = db.get_setting("LLM_PROVIDER")
+_db_gemini_model = db.get_setting("GEMINI_MODEL") or config.GEMINI_MODEL
+_db_fallback = db.get_setting("DISABLE_OLLAMA_FALLBACK")
+
+st.session_state.setdefault(
+    "provider_radio",
+    (llm_options[1] if _db_provider == "gemini" else
+     llm_options[0] if _db_provider == "ollama" else
+     llm_options[1] if config.LLM_PROVIDER == "gemini" else llm_options[0]))
+st.session_state.setdefault("gemini_api_key",
+                            db.get_setting("GEMINI_API_KEY") or config.GEMINI_API_KEY)
 st.session_state.setdefault("gemini_extra_keys",
-                            ",".join(config.GEMINI_API_KEYS))
+                            db.get_setting("GEMINI_API_KEYS") or ",".join(config.GEMINI_API_KEYS))
 st.session_state.setdefault("gemini_model_sel",
-                            config.GEMINI_MODEL if config.GEMINI_MODEL in gemini_models
+                            _db_gemini_model if _db_gemini_model in gemini_models
                             else "gemini-3.1-flash-lite")
-st.session_state.setdefault("ollama_model_sel", config.OLLAMA_MODEL)
+st.session_state.setdefault("ollama_model_sel",
+                            db.get_setting("OLLAMA_MODEL") or config.OLLAMA_MODEL)
 st.session_state.setdefault("no_ollama_fallback",
-                            config.DISABLE_OLLAMA_FALLBACK)
+                            (_db_fallback == "1") if _db_fallback is not None
+                            else config.DISABLE_OLLAMA_FALLBACK)
 set_ollama_fallback(not st.session_state["no_ollama_fallback"])
 
 selected_llm_label = st.session_state["provider_radio"]

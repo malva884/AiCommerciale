@@ -75,6 +75,13 @@ CREATE TABLE IF NOT EXISTS prospects_europa (
     last_analyzed_at TEXT,
     UNIQUE(company_name, country_code)
 );
+
+--- Impostazioni applicative salvate dalla UI (chiave/valore)
+--- Esempi: LLM_PROVIDER, GEMINI_API_KEY, GEMINI_MODEL, DISABLE_OLLAMA_FALLBACK
+CREATE TABLE IF NOT EXISTS app_settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT ''
+);
 """
 
 
@@ -458,3 +465,28 @@ def opportunity_targets() -> list[dict]:
                      AND TRIM(target_company) != ''
                GROUP BY target_company""").fetchall()
     return [dict(r) for r in rows]
+
+
+# ----------------------------------------------------------------------------
+# IMPOSTAZIONI APPLICATIVE (salvate dalla dashboard, persistenti su volume DB)
+# ----------------------------------------------------------------------------
+
+def get_setting(key: str) -> str | None:
+    """Valore di una impostazione UI. None se mai salvata."""
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM app_settings WHERE key=?",
+                (key,)).fetchone()
+        return row["value"] if row else None
+    except Exception:
+        return None  # tabella non ancora creata / DB non raggiungibile
+
+
+def set_setting(key: str, value: str):
+    """Salva una impostazione UI (stringa vuota consentita = 'svuota')."""
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value or ""))
