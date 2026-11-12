@@ -8,6 +8,7 @@ Estrae:
 - Motivazione sintetica e Prossima azione commerciale
 - Bozza email di primo contatto adattata al tone of voice del Paese
 """
+import hashlib
 import json
 import re
 import time
@@ -16,7 +17,7 @@ import requests
 
 import db
 from config import (AZIENDA, COUNTRY_TO_AREA, GEMINI_API_KEY,
-                    GEMINI_API_URL, GEMINI_DAILY_LIMIT,
+                    GEMINI_API_KEYS, GEMINI_API_URL, GEMINI_DAILY_LIMIT,
                     GEMINI_MIN_INTERVAL, GEMINI_MODEL, GEMINI_TIMEOUT,
                     KEYWORD_SCORE, LLM_PROVIDER, OLLAMA_MODEL,
                     OLLAMA_TIMEOUT, OLLAMA_URL)
@@ -26,7 +27,7 @@ _RUNTIME_PROVIDER = None
 _RUNTIME_GEMINI_KEY = None
 _RUNTIME_GEMINI_MODEL = None
 _RUNTIME_OLLAMA_MODEL = None
-_GEMINI_QUOTA_EXHAUSTED = False   # 429 ricevuto o budget giornaliero esaurito
+_GEMINI_KEYS_EXHAUSTED = set()   # key_id esauriti oggi (429 o budget)
 _LAST_GEMINI_CALL = 0.0           # timestamp ultima chiamata (pacing RPM)
 
 
@@ -136,10 +137,29 @@ def ollama_available() -> bool:
         return False
 
 
+def _gemini_keys(api_key: str | None = None) -> list[str]:
+    """Chiavi Gemini attive: esplicita (UI/script) oppure rotazione da env."""
+    explicit = api_key or _RUNTIME_GEMINI_KEY
+    if explicit and explicit.strip():
+        return [explicit.strip()]
+    keys = [GEMINI_API_KEY.strip()] if GEMINI_API_KEY.strip() else []
+    keys += GEMINI_API_KEYS
+    return list(dict.fromkeys(keys))  # dedup preservando lordine
+
+
+def _key_id(key: str) -> str:
+    """Id anonimo della chiave per il contatore quota (no leak nei dati)."""
+    return hashlib.sha1(key.encode()).hexdigest()[:10]
+
+
+def gemini_keys_count() -> int:
+    """Numero di chiavi Gemini configurate (capacita' giornaliera totale)."""
+    return len(_gemini_keys())
+
+
 def gemini_available(api_key: str | None = None) -> bool:
     """Verifica se e' configurata una API key per Google Gemini aziendale."""
-    key = api_key or _RUNTIME_GEMINI_KEY or GEMINI_API_KEY
-    return bool(key and key.strip())
+    return bool(_gemini_keys(api_key))
 
 
 def is_llm_available(provider: str | None = None, api_key: str | None = None) -> bool:
@@ -151,22 +171,22 @@ def is_llm_available(provider: str | None = None, api_key: str | None = None) ->
 
 
 def gemini_quota_exhausted() -> bool:
-    """True se il budget giornaliero Gemini e' esaurito (429 o contatore)."""
-    return _GEMINI_QUOTA_EXHAUSTED or db.llm_calls_today() >= GEMINI_DAILY_LIMIT
+    """True se TUTTE le chiavi Gemini hanno esaurito il budget giornaliero."""
+    keys = _gemini_keys()
+    return bool(keys) and all(
+        _key_id(k) in _GEMINI_KEYS_EXHAUSTED
+        or db.llm_calls_today(_key_id(k)) >= GEMINI_DAILY_LIMIT
+        for k in keys)
 
 
 def _call_gemini_json(system_prompt: str, user_prompt: str,
                       api_key: str | None = None,
                       model: str | None = None,
                       timeout: int | None = None) -> dict | None:
-    """Chiamata REST a Google Gemini (Interactions API) con output JSON."""
-    global _GEMINI_QUOTA_EXHAUSTED, _LAST_GEMINI_CALL
-    key = api_key or _RUNTIME_GEMINI_KEY or GEMINI_API_KEY
-    if not key:
-        return None
-    if gemini_quota_exhausted():
-        return None
-
+    """Chiamata REST a Google Gemini (Interactions API) con output JSON.
+    Rotazione multi-chiave: 429 o budget esaurito su una chiave -> passa alla
+    successiva. Il conteggio quota e' per chiave (la quota e' per progetto)."""
+    global _LAST_GEMINI_CALL
     mdl = model or _RUNTIME_GEMINI_MODEL or GEMINI_MODEL
     url = GEMINI_API_URL.format(model=mdl)  # no-op se l'URL non contiene {model}
     payload = {
@@ -177,45 +197,49 @@ def _call_gemini_json(system_prompt: str, user_prompt: str,
         },
     }
 
-    # Pacing RPM: distanzia le chiamate per restare sotto il limite al minuto
-    wait = GEMINI_MIN_INTERVAL - (time.time() - _LAST_GEMINI_CALL)
-    if wait > 0:
-        time.sleep(wait)
-    _LAST_GEMINI_CALL = time.time()
-    db.llm_register_call()  # ogni tentativo consuma quota giornaliera
-
-    try:
-        resp = requests.post(
-            url,
-            params={"key": key},
-            headers={"x-goog-api-key": key},
-            json=payload,
-            timeout=timeout or GEMINI_TIMEOUT,
-        )
-        if resp.status_code == 429:
-            _GEMINI_QUOTA_EXHAUSTED = True
-            print(f"[llm] Gemini 429 quota/rate limit esaurito", flush=True)
+    for key in _gemini_keys(api_key):
+        kid = _key_id(key)
+        if kid in _GEMINI_KEYS_EXHAUSTED or db.llm_calls_today(kid) >= GEMINI_DAILY_LIMIT:
+            continue
+        # Pacing RPM: distanzia le chiamate per restare sotto il limite al minuto
+        wait = GEMINI_MIN_INTERVAL - (time.time() - _LAST_GEMINI_CALL)
+        if wait > 0:
+            time.sleep(wait)
+        _LAST_GEMINI_CALL = time.time()
+        db.llm_register_call(kid)  # ogni tentativo consuma quota giornaliera
+        try:
+            resp = requests.post(
+                url,
+                params={"key": key},
+                headers={"x-goog-api-key": key},
+                json=payload,
+                timeout=timeout or GEMINI_TIMEOUT,
+            )
+            if resp.status_code == 429:
+                _GEMINI_KEYS_EXHAUSTED.add(kid)
+                print(f"[llm] Gemini 429 su chiave ...{key[-4:]}: switch alla successiva", flush=True)
+                continue
+            if resp.status_code != 200:
+                print(f"[llm] Gemini HTTP {resp.status_code}: {resp.text[:300]}", flush=True)
+                return None
+            data = resp.json()
+            texts = [
+                part.get("text", "")
+                for step in data.get("steps", [])
+                if step.get("type") == "model_output"
+                for part in step.get("content", [])
+                if part.get("type") == "text"
+            ]
+            raw_text = texts[-1] if texts else ""
+            if not raw_text:
+                print(f"[llm] Gemini: risposta senza testo: {str(data)[:300]}", flush=True)
+                return None
+            m = _JSON_RE.search(raw_text)
+            return json.loads(m.group(0)) if m else json.loads(raw_text)
+        except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as e:
+            print(f"[llm] Gemini errore: {type(e).__name__}: {e}", flush=True)
             return None
-        if resp.status_code != 200:
-            print(f"[llm] Gemini HTTP {resp.status_code}: {resp.text[:300]}", flush=True)
-            return None
-        data = resp.json()
-        texts = [
-            part.get("text", "")
-            for step in data.get("steps", [])
-            if step.get("type") == "model_output"
-            for part in step.get("content", [])
-            if part.get("type") == "text"
-        ]
-        raw_text = texts[-1] if texts else ""
-        if not raw_text:
-            print(f"[llm] Gemini: risposta senza testo: {str(data)[:300]}", flush=True)
-            return None
-        m = _JSON_RE.search(raw_text)
-        return json.loads(m.group(0)) if m else json.loads(raw_text)
-    except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as e:
-        print(f"[llm] Gemini errore: {type(e).__name__}: {e}", flush=True)
-        return None
+    return None
 
 
 def _call_ollama_json(system_prompt: str, user_prompt: str,

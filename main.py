@@ -6,8 +6,8 @@ from datetime import datetime
 import db
 from config import GEMINI_DAILY_LIMIT
 from fetchers import fetch_news, fetch_ted, fetch_ted_awards
-from llm import (gemini_quota_exhausted, get_active_provider,
-                 heuristic_prescore, score_opportunity)
+from llm import (gemini_keys_count, gemini_quota_exhausted,
+                 get_active_provider, heuristic_prescore, score_opportunity)
 
 
 def _log(msg: str):
@@ -52,12 +52,12 @@ def run(use_llm: bool = True, provider: str | None = None):
                 key=lambda r: heuristic_prescore(
                     r["title"], r["text"] or "", r["country"]),
                 reverse=True)
-        budget = max(0, GEMINI_DAILY_LIMIT - db.llm_calls_today())
+        budget = max(0, GEMINI_DAILY_LIMIT * gemini_keys_count() - db.llm_calls_today())
         _log(f"Scoring AI in corso: {len(to_score)} opportunita' da valutare "
              f"(provider={active_provider.upper()}, budget Gemini residuo: {budget})")
         for i, row in enumerate(to_score, 1):
             if active_provider == "gemini" and gemini_quota_exhausted():
-                _log(f"Quota Gemini esaurita ({GEMINI_DAILY_LIMIT}/giorno): "
+                _log(f"Quota Gemini esaurita ({GEMINI_DAILY_LIMIT * gemini_keys_count()}/giorno): "
                      f"{len(to_score) - i + 1} opportunita' rinviate al prossimo run.")
                 break
             res = score_opportunity(

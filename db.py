@@ -50,8 +50,10 @@ CREATE TABLE IF NOT EXISTS fetch_errors (
 
 -- Contatore giornaliero chiamate LLM cloud (quota Gemini RPD)
 CREATE TABLE IF NOT EXISTS llm_usage (
-    day    TEXT PRIMARY KEY,           -- YYYY-MM-DD
-    calls  INTEGER NOT NULL DEFAULT 0
+    day    TEXT NOT NULL,              -- YYYY-MM-DD
+    key_id TEXT NOT NULL DEFAULT '',   -- hash chiave Gemini ('' = legacy)
+    calls  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, key_id)
 );
 """
 
@@ -78,6 +80,20 @@ def init_db():
         for name, ctype in new_cols:
             if name not in cols:
                 conn.execute(f"ALTER TABLE opportunities ADD COLUMN {name} {ctype}")
+        # Migrazione llm_usage -> conteggio per chiave (rotazione multi-key)
+        usage_cols = {r["name"] for r in conn.execute("PRAGMA table_info(llm_usage)").fetchall()}
+        if "key_id" not in usage_cols:
+            conn.executescript("""
+                ALTER TABLE llm_usage RENAME TO llm_usage_old;
+                CREATE TABLE llm_usage (
+                    day    TEXT NOT NULL,
+                    key_id TEXT NOT NULL DEFAULT '',
+                    calls  INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (day, key_id)
+                );
+                INSERT INTO llm_usage (day, calls) SELECT day, calls FROM llm_usage_old;
+                DROP TABLE llm_usage_old;
+            """)
 
 
 def insert_opportunity(item: dict) -> bool:
@@ -172,22 +188,27 @@ def stats() -> dict:
     return {"total": total, "scored": scored}
 
 
-def llm_calls_today() -> int:
-    """Chiamate LLM cloud registrate oggi (quota giornaliera)."""
+def llm_calls_today(key_id: str | None = None) -> int:
+    """Chiamate LLM cloud registrate oggi. key_id=None -> totale tutte le chiavi."""
     with _connect() as conn:
-        row = conn.execute(
-            "SELECT calls FROM llm_usage WHERE day=?",
-            (datetime.now().strftime("%Y-%m-%d"),)).fetchone()
-    return row[0] if row else 0
+        if key_id is None:
+            row = conn.execute(
+                "SELECT SUM(calls) FROM llm_usage WHERE day=?",
+                (datetime.now().strftime("%Y-%m-%d"),)).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT calls FROM llm_usage WHERE day=? AND key_id=?",
+                (datetime.now().strftime("%Y-%m-%d"), key_id)).fetchone()
+    return (row[0] or 0) if row else 0
 
 
-def llm_register_call():
-    """Incrementa il contatore giornaliero delle chiamate LLM cloud."""
+def llm_register_call(key_id: str = ""):
+    """Incrementa il contatore giornaliero delle chiamate LLM cloud per chiave."""
     with _connect() as conn:
         conn.execute(
-            """INSERT INTO llm_usage (day, calls) VALUES (?, 1)
-               ON CONFLICT(day) DO UPDATE SET calls = calls + 1""",
-            (datetime.now().strftime("%Y-%m-%d"),))
+            """INSERT INTO llm_usage (day, key_id, calls) VALUES (?, ?, 1)
+               ON CONFLICT(day, key_id) DO UPDATE SET calls = calls + 1""",
+            (datetime.now().strftime("%Y-%m-%d"), key_id))
 
 
 def get_company_info(company_name: str) -> dict | None:

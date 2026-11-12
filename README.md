@@ -39,6 +39,9 @@ Quota Gemini (free tier ~500 RPD / ~15 RPM per modello): le chiamate sono
 conteggiate in SQLite e la pipeline si ferma a `GEMINI_DAILY_LIMIT` (default
 450); gli scoring rimasti sono rinviati al run successivo. `GEMINI_MIN_INTERVAL`
 (default 4.5s) distanzia le chiamate per restare sotto il limite al minuto.
+Piu' chiavi in rotazione con `GEMINI_API_KEYS="k1,k2,k3"`: quando una satura,
+lo switch alla successiva e' automatico. NB: la quota e' per *progetto* Google
+Cloud — solo chiavi di progetti diversi aumentano il budget totale.
 
 TED (opzionale, per le gare UE): API key gratuita su
 <https://ted.europa.eu>, poi `setx TED_API_KEY "la-chiave"` e riaprire

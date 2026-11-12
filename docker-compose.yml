@@ -9,6 +9,7 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
       OLLAMA_URL: http://ollama:11434/api/chat
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_API_KEYS: ${GEMINI_API_KEYS:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.1-flash-lite}
       GEMINI_DAILY_LIMIT: ${GEMINI_DAILY_LIMIT:-450}
       GEMINI_MIN_INTERVAL: ${GEMINI_MIN_INTERVAL:-4.5}
@@ -38,6 +39,7 @@ services:
       OLLAMA_URL: http://ollama:11434/api/chat
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_API_KEYS: ${GEMINI_API_KEYS:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.1-flash-lite}
       GEMINI_DAILY_LIMIT: ${GEMINI_DAILY_LIMIT:-450}
       GEMINI_MIN_INTERVAL: ${GEMINI_MIN_INTERVAL:-4.5}
