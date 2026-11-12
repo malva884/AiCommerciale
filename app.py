@@ -313,6 +313,14 @@ if section == _SECTIONS[6]:
         )
         st.selectbox("Modello Gemini", gemini_models, key="gemini_model_sel")
 
+        st.checkbox(
+            "⛔ Non usare Ollama se Gemini non funziona",
+            key="no_ollama_fallback",
+            help="Se attivo e Gemini fallisce o esaurisce la quota, la pipeline "
+                 "NON ripiega su Ollama locale: le opportunita' restano con "
+                 "scoring euristico e vengono rinviate al prossimo run."
+        )
+
         n_keys = len(ui_keys) or gemini_keys_count()
         if ui_keys or gemini_keys_count():
             st.success(f"🟢 Gemini pronto ({selected_gemini_model}) — {n_keys} chiavi attive")
