@@ -1,9 +1,8 @@
 """Modulo Account Research & Dossier Pre-Meeting."""
 import json
 import re
-import requests
-from config import AZIENDA, OLLAMA_MODEL, OLLAMA_TIMEOUT, OLLAMA_URL
-from llm import ollama_available
+from config import AZIENDA
+from llm import generate_json_completion, is_llm_available
 
 DOSSIER_SYSTEM_PROMPT = f"""Sei il Senior Sales Intelligence Specialist per un produttore di cavi speciali (Fibra & Rame).
 {AZIENDA}
@@ -28,28 +27,18 @@ Rispondi SOLO con un JSON strutturato su una riga:
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
-def generate_account_dossier(company_name: str, country: str = "Europa", notes: str = "") -> dict:
+def generate_account_dossier(company_name: str, country: str = "Europa", notes: str = "",
+                             provider: str | None = None) -> dict:
     """Genera il dossier account strategico per il commerciale."""
-    if ollama_available() and company_name.strip():
-        try:
-            resp = requests.post(
-                OLLAMA_URL,
-                json={
-                    "model": OLLAMA_MODEL,
-                    "stream": False,
-                    "format": "json",
-                    "messages": [
-                        {"role": "system", "content": DOSSIER_SYSTEM_PROMPT},
-                        {"role": "user", "content": f"AZIENDA TARGET: {company_name}\nPAESE: {country}\nNOTE/CONTESTO: {notes}"},
-                    ],
-                },
-                timeout=OLLAMA_TIMEOUT,
-            )
-            resp.raise_for_status()
-            content = resp.json()["message"]["content"]
-            return json.loads(_JSON_RE.search(content).group(0))
-        except Exception:
-            pass
+    if is_llm_available(provider) and company_name.strip():
+        data, used_p = generate_json_completion(
+            DOSSIER_SYSTEM_PROMPT,
+            f"AZIENDA TARGET: {company_name}\nPAESE: {country}\nNOTE/CONTESTO: {notes}",
+            provider=provider
+        )
+        if data:
+            data["generated_by"] = used_p
+            return data
 
     # Fallback euristico
     return {

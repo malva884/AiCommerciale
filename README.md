@@ -4,9 +4,14 @@ Agente locale che raccoglie segnali pubblici (gare d'appalto UE, news su
 data center / ferroviario / fibra) e li valuta come opportunita' di nuovi
 ordini per un produttore di cavi in fibra ottica e rame.
 
-**Privacy**: nessun dato a servizi cloud. Il scoring usa un LLM locale
-(Ollama); senza Ollama attivo c'e' un fallback euristico a parole chiave.
-Le uniche chiamate verso l'esterno sono il download delle fonti pubbliche.
+**Motore AI (LLM)**: Supporto ibrido flessibile:
+- **Locale (Ollama)**: 100% on-premise e privacy (`llama3.1:8b`, `mistral:7b`).
+- **Cloud Aziendale (Google Gemini)**: massima accuratezza e velocità (`gemini-2.0-flash`, `gemini-1.5-flash`, `gemini-1.5-pro`).
+- **Fallback Euristico**: parole chiave e scoring deterministico se nessun LLM è online.
+
+La scelta del provider può essere effettuata:
+1. Direttamente dall'interfaccia Streamlit nella sidebar (**🧠 Motore AI**), inserendo la chiave Gemini o selezionando Ollama.
+2. Tramite variabili d'ambiente (`LLM_PROVIDER=gemini` o `LLM_PROVIDER=ollama`, e `GEMINI_API_KEY="chiave"`).
 
 ## Setup
 
@@ -14,11 +19,20 @@ Le uniche chiamate verso l'esterno sono il download delle fonti pubbliche.
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-LLM locale (opzionale ma consigliato):
+### Opzione A: LLM Locale (Ollama)
 
 ```powershell
 winget install Ollama.Ollama
 ollama pull llama3.1:8b
+```
+
+### Opzione B: Gemini Aziendale (Google AI Studio / Vertex AI)
+
+Impostare la chiave API nell'ambiente o direttamente nel pannello della dashboard:
+
+```powershell
+setx GEMINI_API_KEY "la-tua-api-key"
+setx LLM_PROVIDER "gemini"
 ```
 
 TED (opzionale, per le gare UE): API key gratuita su

@@ -13,8 +13,35 @@ import re
 
 import requests
 
-from config import (AZIENDA, COUNTRY_TO_AREA, KEYWORD_SCORE,
-                    OLLAMA_MODEL, OLLAMA_TIMEOUT, OLLAMA_URL)
+from config import (AZIENDA, COUNTRY_TO_AREA, GEMINI_API_KEY,
+                    GEMINI_API_URL, GEMINI_MODEL, GEMINI_TIMEOUT,
+                    KEYWORD_SCORE, LLM_PROVIDER, OLLAMA_MODEL,
+                    OLLAMA_TIMEOUT, OLLAMA_URL)
+
+# Runtime overrides (impostabili dinamicamente da UI Streamlit o da script)
+_RUNTIME_PROVIDER = None
+_RUNTIME_GEMINI_KEY = None
+_RUNTIME_GEMINI_MODEL = None
+_RUNTIME_OLLAMA_MODEL = None
+
+
+def set_active_provider(provider: str, api_key: str | None = None,
+                        gemini_model: str | None = None,
+                        ollama_model: str | None = None):
+    """Configura a runtime il provider LLM attivo e i relativi parametri."""
+    global _RUNTIME_PROVIDER, _RUNTIME_GEMINI_KEY, _RUNTIME_GEMINI_MODEL, _RUNTIME_OLLAMA_MODEL
+    _RUNTIME_PROVIDER = provider.lower() if provider else None
+    if api_key is not None:
+        _RUNTIME_GEMINI_KEY = api_key.strip()
+    if gemini_model is not None:
+        _RUNTIME_GEMINI_MODEL = gemini_model.strip()
+    if ollama_model is not None:
+        _RUNTIME_OLLAMA_MODEL = ollama_model.strip()
+
+
+def get_active_provider() -> str:
+    """Restituisce il provider corrente ('ollama' o 'gemini')."""
+    return (_RUNTIME_PROVIDER or LLM_PROVIDER or "ollama").lower()
 
 SYSTEM_PROMPT = f"""Sei il Lead Commercial Analyst & Sales Engineer di un'azienda europea produttrice di cavi speciali (Fibra Ottica e Rame).
 {AZIENDA}
@@ -104,39 +131,157 @@ def ollama_available() -> bool:
         return False
 
 
-def _score_ollama(title: str, text: str, country_hint: str | None = None) -> dict | None:
-    prompt = f"TITOLO: {title}\nPAESE_SUGGERITO: {country_hint or 'sconosciuto'}\n\nTESTO:\n{text[:2500]}"
+def gemini_available(api_key: str | None = None) -> bool:
+    """Verifica se e' configurata una API key per Google Gemini aziendale."""
+    key = api_key or _RUNTIME_GEMINI_KEY or GEMINI_API_KEY
+    return bool(key and key.strip())
+
+
+def is_llm_available(provider: str | None = None, api_key: str | None = None) -> bool:
+    """Verifica la disponibilita' del provider LLM selezionato."""
+    p = (provider or get_active_provider()).lower()
+    if p == "gemini":
+        return gemini_available(api_key)
+    return ollama_available()
+
+
+def _call_gemini_json(system_prompt: str, user_prompt: str,
+                      api_key: str | None = None,
+                      model: str | None = None,
+                      timeout: int | None = None) -> dict | None:
+    """Chiamata REST a Google Gemini con JSON mode attivo."""
+    key = api_key or _RUNTIME_GEMINI_KEY or GEMINI_API_KEY
+    if not key:
+        return None
+
+    mdl = model or _RUNTIME_GEMINI_MODEL or GEMINI_MODEL
+    url = GEMINI_API_URL.format(model=mdl)
+    payload = {
+        "system_instruction": {
+            "parts": [{"text": system_prompt}]
+        },
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": user_prompt}]
+            }
+        ],
+        "generationConfig": {
+            "response_mime_type": "application/json",
+            "temperature": 0.2
+        }
+    }
+
+    try:
+        resp = requests.post(
+            url,
+            params={"key": key},
+            json=payload,
+            timeout=timeout or GEMINI_TIMEOUT,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        candidates = data.get("candidates", [])
+        if not candidates:
+            return None
+        raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+        m = _JSON_RE.search(raw_text)
+        return json.loads(m.group(0)) if m else json.loads(raw_text)
+    except (requests.RequestException, ValueError, KeyError, IndexError):
+        return None
+
+
+def _call_ollama_json(system_prompt: str, user_prompt: str,
+                      model: str | None = None,
+                      timeout: int | None = None) -> dict | None:
+    """Chiamata REST a Ollama locale con formato JSON."""
+    mdl = model or _RUNTIME_OLLAMA_MODEL or OLLAMA_MODEL
     try:
         resp = requests.post(
             OLLAMA_URL,
-            json={"model": OLLAMA_MODEL, "stream": False, "format": "json",
-                  "messages": [
-                      {"role": "system", "content": SYSTEM_PROMPT},
-                      {"role": "user", "content": prompt},
-                  ]},
-            timeout=OLLAMA_TIMEOUT,
+            json={
+                "model": mdl,
+                "stream": False,
+                "format": "json",
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+            },
+            timeout=timeout or OLLAMA_TIMEOUT,
         )
         resp.raise_for_status()
         content = resp.json()["message"]["content"]
-        data = json.loads(_JSON_RE.search(content).group(0))
-
-        c = data.get("country")
-        area = data.get("area_manager") or (COUNTRY_TO_AREA.get(c) if c else None)
-
-        return {
-            "score": max(0, min(100, int(data.get("score", 0)))),
-            "sector": data.get("sector") or "Altro",
-            "target_company": data.get("target_company"),
-            "country": c,
-            "area_manager": area,
-            "norms": data.get("norms"),
-            "motivation": data.get("motivation", ""),
-            "action": data.get("action", ""),
-            "email_draft": data.get("email_draft", ""),
-            "scored_by": "ollama",
-        }
-    except (requests.RequestException, ValueError, AttributeError):
+        m = _JSON_RE.search(content)
+        return json.loads(m.group(0)) if m else json.loads(content)
+    except (requests.RequestException, ValueError, KeyError, IndexError):
         return None
+
+
+def generate_json_completion(
+    system_prompt: str,
+    user_prompt: str,
+    provider: str | None = None,
+    api_key: str | None = None,
+    model: str | None = None,
+    timeout: int | None = None,
+) -> tuple[dict | None, str]:
+    """Gateway unificato per chiamate LLM in formato JSON.
+    
+    Ritorna una tupla (dati_json, provider_effettivo).
+    Se il provider preferito fallisce, tenta automaticamente l'altro prima di arrendersi.
+    """
+    p = (provider or get_active_provider()).lower()
+
+    if p == "gemini":
+        data = _call_gemini_json(system_prompt, user_prompt, api_key=api_key, model=model, timeout=timeout)
+        if data is not None:
+            return data, "gemini"
+        # Fallback automatico a Ollama se disponibile
+        if ollama_available():
+            data = _call_ollama_json(system_prompt, user_prompt, model=model, timeout=timeout)
+            if data is not None:
+                return data, "ollama"
+        return None, "failed"
+    else:
+        data = _call_ollama_json(system_prompt, user_prompt, model=model, timeout=timeout)
+        if data is not None:
+            return data, "ollama"
+        # Fallback automatico a Gemini se configurato
+        if gemini_available(api_key):
+            data = _call_gemini_json(system_prompt, user_prompt, api_key=api_key, model=model, timeout=timeout)
+            if data is not None:
+                return data, "gemini"
+        return None, "failed"
+
+
+def _score_llm(title: str, text: str, country_hint: str | None = None,
+               provider: str | None = None) -> dict | None:
+    prompt = f"TITOLO: {title}\nPAESE_SUGGERITO: {country_hint or 'sconosciuto'}\n\nTESTO:\n{text[:2500]}"
+    data, scored_by = generate_json_completion(SYSTEM_PROMPT, prompt, provider=provider)
+    if not data:
+        return None
+
+    c = data.get("country")
+    area = data.get("area_manager") or (COUNTRY_TO_AREA.get(c) if c else None)
+
+    return {
+        "score": max(0, min(100, int(data.get("score", 0)))),
+        "sector": data.get("sector") or "Altro",
+        "target_company": data.get("target_company"),
+        "country": c,
+        "area_manager": area,
+        "norms": data.get("norms"),
+        "motivation": data.get("motivation", ""),
+        "action": data.get("action", ""),
+        "email_draft": data.get("email_draft", ""),
+        "scored_by": scored_by,
+    }
+
+
+def _score_ollama(title: str, text: str, country_hint: str | None = None) -> dict | None:
+    """Compatibilita' retroattiva con codice esistente."""
+    return _score_llm(title, text, country_hint, provider="ollama")
 
 
 def _score_heuristic(title: str, text: str, country_hint: str | None = None) -> dict:
@@ -230,17 +375,18 @@ def _score_heuristic(title: str, text: str, country_hint: str | None = None) -> 
     }
 
 
-def score_opportunity(title: str, text: str, country_hint: str | None = None) -> dict:
-    """LLM locale se disponibile, altrimenti euristico.
+def score_opportunity(title: str, text: str, country_hint: str | None = None,
+                      provider: str | None = None) -> dict:
+    """Scoring con LLM (Ollama o Gemini) se disponibile, altrimenti euristico.
 
     Ottimizzazione CPU: se l'euristica identifica subito l'articolo come rumore
     (cronaca, polemiche, nessun intent commerciale - score 0), scarta direttamente
-    senza interpellare Ollama, risparmiando minuti preziosi su macchine senza GPU.
+    senza interpellare l'LLM, risparmiando tempo e chiamate.
     """
     quick = _score_heuristic(title, text, country_hint)
     if quick.get("score", 0) == 0 and quick.get("scored_by") == "heuristic_filtered":
         return quick
 
-    result = _score_ollama(title, text, country_hint)
+    result = _score_llm(title, text, country_hint, provider=provider)
     return result if result else quick
 

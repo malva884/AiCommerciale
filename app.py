@@ -5,11 +5,13 @@ import re
 import sqlite3
 import subprocess
 import sys
+from datetime import datetime
 
 import pandas as pd
 import streamlit as st
 
 import db
+import config
 from account_research import generate_account_dossier
 from company_enrich import enrich_company, format_amount
 from config import AREA_MAPPING, DB_PATH, SECTORS
@@ -20,6 +22,13 @@ from crm_analyzer import (
     check_pipeline_health,
     get_suggested_cable_solution,
     match_company_with_erp_clients,
+)
+from llm import (
+    gemini_available,
+    get_active_provider,
+    is_llm_available,
+    ollama_available,
+    set_active_provider,
 )
 from prospecting_engine import (
     LOOKALIKE_PROSPECTS_DB,
@@ -51,7 +60,61 @@ def load_cached_erp_periodicity() -> pd.DataFrame:
     return pd.DataFrame()
 
 st.title("⚡ Co-Pilota Commerciale AI - Cavi Speciali B2B")
-st.caption("Intelligence Europea, Analisi Capitolati (RFP), Account Dossier, CRM Storico & New Business Lookalike — Dati 100% On-Premise.")
+st.caption("Intelligence Europea, Analisi Capitolati (RFP), Account Dossier, CRM Storico & New Business Lookalike — Supporto AI Locale & Cloud.")
+
+# ==============================================================================
+# SIDEBAR: SELEZIONE MOTORE AI (OLLAMA LOCALE / GEMINI AZIENDALE)
+# ==============================================================================
+st.sidebar.header("🧠 Motore AI (LLM)")
+llm_options = ["🦙 Ollama (Locale)", "☁️ Google Gemini (Aziendale)"]
+default_idx = 1 if config.LLM_PROVIDER == "gemini" else 0
+selected_llm_label = st.sidebar.radio(
+    "Provider attivo:",
+    llm_options,
+    index=default_idx,
+    help="Scegli se usare il modello locale (Ollama) o l'AI cloud aziendale (Google Gemini)."
+)
+
+selected_provider = "gemini" if "Gemini" in selected_llm_label else "ollama"
+
+if selected_provider == "gemini":
+    gemini_key_input = st.sidebar.text_input(
+        "Gemini API Key Aziendale",
+        value=st.session_state.get("gemini_api_key", config.GEMINI_API_KEY),
+        type="password",
+        help="Inserisci la chiave API aziendale di Google Gemini (AI Studio o Vertex AI)."
+    )
+    st.session_state["gemini_api_key"] = gemini_key_input
+
+    gemini_models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+    current_model = config.GEMINI_MODEL if config.GEMINI_MODEL in gemini_models else "gemini-2.0-flash"
+    selected_gemini_model = st.sidebar.selectbox(
+        "Modello Gemini",
+        gemini_models,
+        index=gemini_models.index(current_model),
+    )
+
+    if gemini_key_input.strip():
+        st.sidebar.success(f"🟢 Gemini pronto ({selected_gemini_model})")
+    else:
+        st.sidebar.warning("⚠️ Inserisci la chiave API di Gemini")
+
+    set_active_provider("gemini", api_key=gemini_key_input, gemini_model=selected_gemini_model)
+else:
+    ollama_online = ollama_available()
+    selected_ollama_model = st.sidebar.text_input(
+        "Modello Ollama",
+        value=config.OLLAMA_MODEL,
+        help="Nome del modello in locale (es. llama3.1:8b, mistral:7b)."
+    )
+    if ollama_online:
+        st.sidebar.success(f"🟢 Ollama online ({selected_ollama_model})")
+    else:
+        st.sidebar.warning("🔴 Ollama offline (fallback euristico attivo)")
+
+    set_active_provider("ollama", ollama_model=selected_ollama_model)
+
+st.sidebar.divider()
 
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "🎯 Tender Intelligence & News",
@@ -295,8 +358,8 @@ with tab2:
     rfp_input = st.text_area("Testo del Capitolato / Specifiche di gara:", value=sample_rfp, height=180)
 
     if st.button("🚀 Analizza Capitolato Tecnico"):
-        with st.spinner("Estrazione requisiti tecnici con AI locale in corso..."):
-            rfp_res = analyze_rfp(rfp_input)
+        with st.spinner(f"Estrazione requisiti tecnici con AI ({selected_provider.upper()}) in corso..."):
+            rfp_res = analyze_rfp(rfp_input, provider=selected_provider)
 
         col_m1, col_m2 = st.columns([1, 1])
         col_m1.success(f"**Match Produttivo:** {rfp_res.get('our_match_level')}")
@@ -352,7 +415,7 @@ with tab3:
             _notes = extra_notes
             if _info:
                 _notes += "\nDATI PUBBLICI AZIENDA: " + _company_brief(_info)
-            dossier = generate_account_dossier(target_company, target_country, _notes)
+            dossier = generate_account_dossier(target_company, target_country, _notes, provider=selected_provider)
 
         if _info:
             st.caption("📊 Dati pubblici (Wikidata): " + _company_brief(_info))
@@ -754,6 +817,7 @@ with tab5:
                         language=outreach_lang,
                         specific_project=ctx_project,
                         cable_focus=ctx_cables,
+                        provider=selected_provider,
                     )
 
                 st.success(f"✅ Proposta commerciale generata per **{final_company_target}**!")
@@ -777,6 +841,95 @@ with tab5:
 # TAB 6: LOG ERRORI DI RACCOLTA
 # ==============================================================================
 with tab6:
+    # ------------------------------------------------------------------
+    # MONITOR PIPELINE LIVE (auto-refresh ogni 2s)
+    # ------------------------------------------------------------------
+    st.subheader("📡 Monitor Pipeline in Tempo Reale")
+
+    _PIPELINE_LOG_PATH = os.path.join(os.path.dirname(DB_PATH),
+                                      "pipeline_run.log")
+
+    @st.fragment(run_every=2.0)
+    def _pipeline_live_monitor():
+        proc = st.session_state.get("pipeline_proc")
+        rc = proc.poll() if proc is not None else None
+        running = proc is not None and rc is None
+        started_iso = st.session_state.get("pipeline_started")
+        prov = st.session_state.get("pipeline_provider", "—")
+
+        lines = []
+        if os.path.exists(_PIPELINE_LOG_PATH):
+            try:
+                with open(_PIPELINE_LOG_PATH, "r", encoding="utf-8",
+                          errors="replace") as f:
+                    lines = f.read().splitlines()
+            except OSError:
+                pass
+
+        # --- metriche di stato ---
+        m1, m2, m3, m4 = st.columns(4)
+        if running:
+            stato = "🟡 IN ESECUZIONE"
+        elif proc is None and not lines:
+            stato = "⚪ MAI AVVIATA"
+        elif rc == 0 or (rc is None and lines and
+                         "PIPELINE COMPLETATA" in lines[-1]):
+            stato = "🟢 COMPLETATA"
+        elif rc is None:
+            stato = "🟠 INTERROTTA"
+        else:
+            stato = "🔴 ERRORE"
+        m1.metric("Stato", stato)
+        m2.metric("Provider LLM", str(prov).upper())
+
+        elapsed = "—"
+        if started_iso:
+            try:
+                secs = int((datetime.now()
+                            - datetime.fromisoformat(started_iso)).total_seconds())
+                elapsed = f"{secs // 60}m {secs % 60}s"
+            except ValueError:
+                pass
+        m3.metric("Tempo trascorso", elapsed)
+
+        prog_txt, prog_val = "—", 0.0
+        for ln in reversed(lines):
+            mm = re.search(r"Scoring (\d+)/(\d+)", ln)
+            if mm:
+                prog_txt = f"{mm.group(1)}/{mm.group(2)}"
+                prog_val = int(mm.group(1)) / max(1, int(mm.group(2)))
+                break
+        m4.metric("Scoring AI", prog_txt)
+
+        if running:
+            st.progress(prog_val, text="Avanzamento scoring…"
+                      if prog_txt != "—" else "Raccolta fonti in corso…")
+
+        # --- fase corrente ---
+        last_line = lines[-1] if lines else ""
+        if last_line:
+            st.caption(f"**Ultima attività:** `{last_line.strip()}`")
+
+        # --- stop button ---
+        if running:
+            if st.button("⛔ Interrompi Pipeline", type="secondary"):
+                try:
+                    proc.terminate()
+                except Exception as exc:
+                    st.error(f"Errore interruzione: {exc}")
+
+        # --- log tail ---
+        st.markdown("**📜 Output pipeline (live):**")
+        tail = lines[-120:] if lines else ["(nessun output ancora)"]
+        st.code("\n".join(tail), language="log", height=400)
+
+    _pipeline_live_monitor()
+
+    st.divider()
+
+    # ------------------------------------------------------------------
+    # STORICO ERRORI
+    # ------------------------------------------------------------------
     st.subheader("🛠️ Storico Errori di Raccolta")
     st.caption("Errori da sistemare: indirizzi non raggiungibili, API in errore, "
                "feed malformati, fonti saltate. Gli errori risolti si possono "
@@ -838,39 +991,76 @@ with tab6:
 
 
 # ==============================================================================
-# SIDEBAR REFRESH ACTION
+# SIDEBAR REFRESH ACTION (PIPELINE IN BACKGROUND + LOG LIVE)
 # ==============================================================================
+_PIPELINE_LOG_PATH = os.path.join(os.path.dirname(DB_PATH), "pipeline_run.log")
+
+
+def _read_pipeline_log(tail: int = 300) -> list[str]:
+    """Ultime `tail` righe del log di pipeline."""
+    try:
+        with open(_PIPELINE_LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
+            return f.read().splitlines()[-tail:]
+    except OSError:
+        return []
+
+
+def _pipeline_status() -> dict:
+    """Stato corrente della pipeline lanciata dalla UI."""
+    proc = st.session_state.get("pipeline_proc")
+    if proc is None:
+        return {"state": "idle", "rc": None}
+    rc = proc.poll()
+    if rc is None:
+        return {"state": "running", "rc": None}
+    return {"state": "done" if rc == 0 else "failed", "rc": rc}
+
+
+def _start_pipeline():
+    """Avvia main.py come sottoprocesso in background, output su file di log."""
+    _main_py = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "main.py")
+    os.makedirs(os.path.dirname(_PIPELINE_LOG_PATH), exist_ok=True)
+    env = os.environ.copy()
+    env["LLM_PROVIDER"] = selected_provider
+    env["PYTHONUNBUFFERED"] = "1"
+    if selected_provider == "gemini" and st.session_state.get("gemini_api_key"):
+        env["GEMINI_API_KEY"] = st.session_state["gemini_api_key"]
+        env["GEMINI_MODEL"] = selected_gemini_model
+    elif selected_provider == "ollama" and selected_ollama_model:
+        env["OLLAMA_MODEL"] = selected_ollama_model
+
+    log_f = open(_PIPELINE_LOG_PATH, "w", encoding="utf-8", errors="replace")
+    proc = subprocess.Popen(
+        [sys.executable, "-u", _main_py],
+        stdout=log_f, stderr=subprocess.STDOUT,
+        env=env, cwd=os.path.dirname(_main_py),
+    )
+    log_f.close()  # il figlio mantiene il proprio handle ereditato
+    st.session_state["pipeline_proc"] = proc
+    st.session_state["pipeline_started"] = datetime.now().isoformat()
+    st.session_state["pipeline_provider"] = selected_provider
+
+
 st.sidebar.divider()
 _n_err = db.unresolved_error_count()
 if _n_err:
     st.sidebar.warning(f"⚠️ {_n_err} errori di raccolta non risolti — "
                        "vedi tab '🛠️ Log Errori'")
 st.sidebar.subheader("⚙️ Aggiornamento Dati")
-if st.sidebar.button("🚀 Aggiorna Fonti & Pipeline"):
-    with st.spinner("Raccolta bandi TED & News europee in corso..."):
-        try:
-            _main_py = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                    "main.py")
-            proc = subprocess.run([sys.executable, _main_py],
-                                  capture_output=True, text=True, timeout=7200)
-            st.session_state["pipeline_rc"] = proc.returncode
-            st.session_state["pipeline_out"] = proc.stdout or ""
-            st.session_state["pipeline_err"] = proc.stderr or ""
-        except subprocess.TimeoutExpired:
-            st.session_state["pipeline_rc"] = -1
-            st.session_state["pipeline_out"] = ""
-            st.session_state["pipeline_err"] = (
-                "Timeout: la pipeline ha superato le 2 ore.")
-    st.rerun()
 
-if "pipeline_rc" in st.session_state:
-    if st.session_state["pipeline_rc"] == 0:
-        st.sidebar.success("Pipeline completata con successo!")
-    else:
-        st.sidebar.error("Errore durante l'esecuzione della pipeline.")
-    with st.sidebar.expander("📋 Output ultima pipeline"):
-        st.code(st.session_state["pipeline_out"][-4000:] or "(nessun output)")
-        if st.session_state["pipeline_err"]:
-            st.code(st.session_state["pipeline_err"][-2000:])
+_pst = _pipeline_status()
+if _pst["state"] == "running":
+    st.sidebar.info("🔄 Pipeline in esecuzione — vedi tab '🛠️ Log Errori'")
+    st.sidebar.button("🚀 Aggiorna Fonti & Pipeline", disabled=True)
+else:
+    if st.sidebar.button("🚀 Aggiorna Fonti & Pipeline"):
+        _start_pipeline()
+        st.toast("Pipeline avviata in background — monitor in tab '🛠️ Log Errori'", icon="🚀")
+        st.rerun()
+    if _pst["state"] == "done":
+        st.sidebar.success("✅ Ultima pipeline completata con successo")
+    elif _pst["state"] == "failed":
+        st.sidebar.error(f"❌ Ultima pipeline fallita (rc={_pst['rc']})")
 
 

@@ -1,9 +1,8 @@
 """Modulo RFP & Capitolati Analyzer: estrazione automatica requisiti tecnici per cavi speciali."""
 import json
 import re
-import requests
-from config import AZIENDA, OLLAMA_MODEL, OLLAMA_TIMEOUT, OLLAMA_URL
-from llm import ollama_available
+from config import AZIENDA
+from llm import generate_json_completion, is_llm_available
 
 RFP_SYSTEM_PROMPT = f"""Sei il Senior Tender Engineer e Technical Sales Manager di un produttore di cavi speciali (Fibra & Rame).
 {AZIENDA}
@@ -28,28 +27,17 @@ Rispondi SOLO con il JSON valido su una riga.
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
-def analyze_rfp(rfp_text: str) -> dict:
-    """Analizza un testo di capitolato con LLM locale o con fallback euristico."""
-    if ollama_available() and len(rfp_text.strip()) > 20:
-        try:
-            resp = requests.post(
-                OLLAMA_URL,
-                json={
-                    "model": OLLAMA_MODEL,
-                    "stream": False,
-                    "format": "json",
-                    "messages": [
-                        {"role": "system", "content": RFP_SYSTEM_PROMPT},
-                        {"role": "user", "content": f"CAPITOLATO TECNICO / RFP:\n\n{rfp_text[:6000]}"},
-                    ],
-                },
-                timeout=OLLAMA_TIMEOUT,
-            )
-            resp.raise_for_status()
-            content = resp.json()["message"]["content"]
-            return json.loads(_JSON_RE.search(content).group(0))
-        except Exception:
-            pass
+def analyze_rfp(rfp_text: str, provider: str | None = None) -> dict:
+    """Analizza un testo di capitolato con LLM (Gemini / Ollama) o con fallback euristico."""
+    if is_llm_available(provider) and len(rfp_text.strip()) > 20:
+        data, used_p = generate_json_completion(
+            RFP_SYSTEM_PROMPT,
+            f"CAPITOLATO TECNICO / RFP:\n\n{rfp_text[:12000]}",
+            provider=provider
+        )
+        if data:
+            data["analyzed_by"] = used_p
+            return data
 
     # Fallback euristico avanzato per capitolati cavi
     text_low = rfp_text.lower()

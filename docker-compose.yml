@@ -6,7 +6,10 @@ services:
     environment:
       TZ: Europe/Rome
       PYTHONUNBUFFERED: "1"
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
       OLLAMA_URL: http://ollama:11434/api/chat
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
       TED_API_KEY: ${TED_API_KEY:-}
       SQLSERVER_HOST: ${SQLSERVER_HOST:-10.141.1.8}
       SQLSERVER_PORT: ${SQLSERVER_PORT:-1433}
@@ -29,8 +32,11 @@ services:
     environment:
       TZ: Europe/Rome
       PYTHONUNBUFFERED: "1"
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
       OLLAMA_URL: http://ollama:11434/api/chat
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
       TED_API_KEY: ${TED_API_KEY:-}
       NIGHTLY_SCHEDULE_TIME: ${NIGHTLY_SCHEDULE_TIME:-01:00}
       RUN_ON_STARTUP_IF_EMPTY: ${RUN_ON_STARTUP_IF_EMPTY:-1}

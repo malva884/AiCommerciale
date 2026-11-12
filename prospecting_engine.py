@@ -11,9 +11,8 @@ import json
 import re
 from typing import Optional
 import requests
-
-from config import AZIENDA, OLLAMA_MODEL, OLLAMA_TIMEOUT, OLLAMA_URL
-from llm import ollama_available
+from config import AZIENDA
+from llm import generate_json_completion, is_llm_available
 
 # ==============================================================================
 # DATABASE PROSPECT EUROPEI (LOOKALIKE PROSPECTING)
@@ -322,6 +321,7 @@ def generate_multilingual_outreach(
     language: str = "it",
     specific_project: str = "",
     cable_focus: str = "",
+    provider: str | None = None,
 ) -> dict:
     """Genera bozze email, LinkedIn e script telefonico personalizzati."""
     lang = language.lower() if language.lower() in OUTREACH_PROMPTS else "it"
@@ -335,28 +335,15 @@ def generate_multilingual_outreach(
         f"GAMMA CAVI DI INTERESSE: {cable_focus or 'Fibra ottica ad alta densità G.657.A1 / Rame CPR B2ca / Cavi speciali'}\n"
     )
 
-    if ollama_available() and company_name.strip():
-        try:
-            resp = requests.post(
-                OLLAMA_URL,
-                json={
-                    "model": OLLAMA_MODEL,
-                    "stream": False,
-                    "format": "json",
-                    "messages": [
-                        {"role": "system", "content": prompt_cfg["system"]},
-                        {"role": "user", "content": user_context},
-                    ],
-                },
-                timeout=OLLAMA_TIMEOUT,
-            )
-            resp.raise_for_status()
-            raw_text = resp.json()["message"]["content"]
-            parsed = json.loads(_JSON_EXTRACT_RE.search(raw_text).group(0))
-            if "email_body" in parsed and "subject" in parsed:
-                return parsed
-        except Exception:
-            pass
+    if is_llm_available(provider) and company_name.strip():
+        data, used_p = generate_json_completion(
+            prompt_cfg["system"],
+            user_context,
+            provider=provider
+        )
+        if data and "email_body" in data and "subject" in data:
+            data["generated_by"] = used_p
+            return data
 
     # Fallback euristico professionale per lingua
     if lang == "en":
