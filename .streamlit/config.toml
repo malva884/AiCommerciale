@@ -2,6 +2,11 @@
 # Nessuna telemetria inviata a Streamlit/Segment: dati 100% on-premise
 gatherUsageStats = false
 
+[client]
+# Nasconde la toolbar nativa (menu ⋮, pulsante "Deploy" per Community Cloud):
+# il deploy passa da Coolify, non serve agli utenti della dashboard
+toolbarMode = "viewer"
+
 [server]
 port = 8501
 
