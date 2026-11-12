@@ -14,8 +14,10 @@ from datetime import datetime
 
 import schedule
 
+import config
 import db
-from llm import ollama_available
+from llm import (ollama_available, set_active_provider, set_gemini_keys,
+                 set_ollama_fallback)
 from main import run as run_pipeline
 
 # Evita problemi di encoding su log console
@@ -26,6 +28,34 @@ SCHEDULE_TIME = os.environ.get("NIGHTLY_SCHEDULE_TIME", "01:00")
 RUN_ON_STARTUP_IF_EMPTY = os.environ.get("RUN_ON_STARTUP_IF_EMPTY", "1").lower() in ("1", "true", "yes")
 
 _job_lock = threading.Lock()
+
+
+def _load_llm_settings_from_db():
+    """Applica allo scheduler le stesse impostazioni 'Motore AI' salvate
+    dalla dashboard in app_settings (provider, chiavi, modelli, fallback).
+    Priorita': DB > env var > default codice, come in app.py."""
+    provider = (db.get_setting("LLM_PROVIDER") or config.LLM_PROVIDER
+                or "ollama").lower()
+    gemini_key = (db.get_setting("GEMINI_API_KEY") or "").strip()
+    extra = [k.strip() for k in (db.get_setting("GEMINI_API_KEYS") or "").split(",")
+             if k.strip()]
+    db_keys = ([gemini_key] if gemini_key else []) + extra
+    set_gemini_keys(db_keys)  # lista vuota -> fallback su chiavi da env
+
+    set_active_provider(
+        provider,
+        api_key=gemini_key or None,
+        gemini_model=db.get_setting("GEMINI_MODEL") or None,
+        ollama_model=db.get_setting("OLLAMA_MODEL") or None,
+    )
+
+    fb = db.get_setting("DISABLE_OLLAMA_FALLBACK")
+    if fb is not None:
+        set_ollama_fallback(fb != "1")
+
+    n_keys = len(db_keys) or len(config.GEMINI_API_KEYS) + bool(config.GEMINI_API_KEY)
+    print(f"[Scheduler] Motore AI: provider={provider}, "
+          f"chiavi Gemini configurate={n_keys}", flush=True)
 
 
 def wait_for_ollama(timeout_sec: int = 120) -> bool:
@@ -53,6 +83,7 @@ def job():
         print(f"[{start.strftime('%Y-%m-%d %H:%M:%S')}] AVVIO PIPELINE NOTTURNA BACKGROUND", flush=True)
         print(f"{'='*60}", flush=True)
 
+        _load_llm_settings_from_db()  # recepisce cambi dalla UI senza restart
         run_pipeline(use_llm=True)
 
         elapsed = (datetime.now() - start).total_seconds()
@@ -70,6 +101,7 @@ def main():
     print(f"[Scheduler] Orario schedulato ogni notte: {SCHEDULE_TIME}", flush=True)
 
     db.init_db()
+    _load_llm_settings_from_db()
     st = db.stats()
     print(f"[Scheduler] Stato DB all'avvio: {st['total']} opportunita' presenti.", flush=True)
 
