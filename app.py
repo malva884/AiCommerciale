@@ -319,7 +319,7 @@ if section == _SECTIONS[0]:
             st.rerun()
 
         if _top_opp:
-            _lbl = f"🎯 Top: {_top_opp['title'][:38]}… (score {_top_opp['score']})"
+            _lbl = f"🎯 Top: {_top_opp[0][:38]}… (score {_top_opp[1]})"
             if st.button(_lbl, width="stretch"):
                 st.session_state["nav_section"] = _SECTIONS[1]
                 st.rerun()
