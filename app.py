@@ -1341,6 +1341,14 @@ else:
         st.toast("Pipeline avviata in background!", icon="🚀")
         st.rerun()
 
+# Avvio pipeline richiesto dal pannello Sales Agent (Panoramica)
+if st.session_state.get("pipeline_autostart"):
+    st.session_state["pipeline_autostart"] = False
+    if _pipeline_status()["state"] != "running":
+        _start_pipeline()
+        st.toast("Pipeline avviata in background!", icon="🚀")
+        st.rerun()
+
 ui_style.sidebar_footer(unresolved_count=_n_err)
 
 
