@@ -480,8 +480,7 @@ def brand():
         '<path d="M21 4V8M19 6H23" stroke="#a78bfa" stroke-width="1.3"/>'
         '</svg>'
         '<div>'
-        '<div class="mk-brand-title">Metriks<span style="font-weight:300; opacity:0.9;">Suite</span></div>'
-        '<span class="mk-brand-badge">Commerciale B2B</span>'
+        '<div class="mk-brand-title">MB Sales<span style="font-weight:300; opacity:0.9;">Metriks</span></div>'
         '</div>'
         '</div>',
         unsafe_allow_html=True
