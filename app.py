@@ -1,5 +1,6 @@
 """Dashboard Co-Pilota Commerciale AI B2B - Cavi Speciali (Fibra & Rame)."""
 import io
+import json
 import os
 import re
 import sqlite3
@@ -8,6 +9,7 @@ import sys
 from datetime import datetime
 
 import pandas as pd
+import requests
 import streamlit as st
 
 import db
@@ -37,8 +39,10 @@ from llm import (
 )
 from prospecting_engine import (
     LOOKALIKE_PROSPECTS_DB,
+    area_for_country,
     generate_multilingual_outreach,
     get_lookalike_prospects,
+    refresh_prospects,
 )
 from rfp_analyzer import analyze_rfp
 import sqlserver_orders as sso
@@ -989,46 +993,88 @@ if section == _SECTIONS[5]:
     # SUB-TAB 1: DATABASE PROSPECT GEMELLI EUROPEI
     # --------------------------------------------------------------------------
     with sub_t1:
-        st.markdown("### 🗺️ Mappa Prospect Europei per Settore & Nazione")
-        st.write("Aziende primarie analoghe ai vostri clienti storici italiani (General Contractor, Installatori FTTH, Cantieri Navali, Operatori Ferroviari).")
+        st.markdown("### 🗺️ Prospect Europei Dinamici")
+        st.write("Aziende rilevate da bandi/news (DB opportunita'), dalla lista seme e da Wikidata — deduplicate contro l'anagrafica clienti ERP e ordinate per match score.")
+
+        _ps = db.prospect_stats()
+        _m1, _m2, _m3, _m4 = st.columns(4)
+        _m1.metric("Prospect in DB", _ps["total"])
+        _m2.metric("Qualificati (>=65)", _ps["by_status"].get("READY_FOR_REVIEW", 0))
+        _m3.metric("Esclusi (gia' clienti ERP)", _ps["by_status"].get("EXISTING_CUSTOMER", 0))
+        _m4.metric("Score Medio", _ps["avg_score"])
+
+        if st.button("🔄 Aggiorna Prospect (ERP dedup + Wikidata + Scraping)", type="primary"):
+            with st.spinner("Pipeline prospect in esecuzione: dedup ERP, Wikidata, scraping siti, scoring..."):
+                _sum = refresh_prospects()
+            st.success(
+                f"✅ {_sum['upserted']} prospect aggiornati su {_sum['candidates']} candidati — "
+                f"{_sum['skipped_erp']} gia' clienti ERP esclusi, "
+                f"{_sum['qualified']} qualificati (>=65), "
+                f"{_sum['scraped']} siti analizzati"
+            )
 
         col_p1, col_p2, col_p3 = st.columns([1, 1, 2])
         with col_p1:
-            country_choices = ["TUTTI", "Francia", "Germania", "Spagna", "Polonia", "Paesi Bassi"]
-            sel_country = st.selectbox("Filtra per Nazione Target:", country_choices)
+            country_choices = ["TUTTI"] + sorted(AREA_MAPPING.keys())
+            sel_country = st.selectbox("Filtra per Area Manager:", country_choices)
         with col_p2:
             sector_choices = ["TUTTI"] + SECTORS
             sel_sector = st.selectbox("Filtra per Settore Core:", sector_choices)
         with col_p3:
-            search_prospect = st.text_input("🔍 Cerca per Nome, Cavi o Tipo Commessa:", "")
+            search_prospect = st.text_input("🔍 Cerca per Nome o Settore:", "")
 
-        prospects = get_lookalike_prospects(
-            country_filter=sel_country,
-            sector_filter=sel_sector,
-            search_query=search_prospect,
-        )
+        # Prima il DB dinamico; se vuoto, fallback alla lista seme curata
+        _db_prospects = db.get_prospects(search=search_prospect, limit=100)
+        if sel_sector != "TUTTI":
+            _db_prospects = [p for p in _db_prospects if p["sector"] == sel_sector]
+        if sel_country != "TUTTI":
+            _db_prospects = [p for p in _db_prospects
+                             if COUNTRY_TO_AREA.get((p["country_code"] or "").upper()) == sel_country
+                             or (p["country_code"] or "").upper() == "NLD" and sel_country == "FRANCE"]
 
-        st.markdown(f"**Trovati {len(prospects)} prospect target altamente qualificati:**")
+        if _db_prospects:
+            st.markdown(f"**Trovati {len(_db_prospects)} prospect nel DB dinamico:**")
+            for p in _db_prospects:
+                with st.container():
+                    hdr_col1, hdr_col2, hdr_col3 = st.columns([3, 1, 1])
+                    with hdr_col1:
+                        st.markdown(f"### 🏢 {p['company_name']} ({p['country_code'] or '—'})")
+                        st.caption(f"Settore: `{p['sector'] or '—'}` | Fonte: `{p['source_type']}` | Stato: `{p['status']}`")
+                    with hdr_col2:
+                        st.metric("Match", f"{p['match_score']}/100")
+                    with hdr_col3:
+                        if p["website_url"]:
+                            st.markdown(f"[🌐 Sito]({p['website_url']})")
+                        li_q = requests.utils.quote(f"{p['company_name']} procurement cables")
+                        st.markdown(f"[🔗 **Buyer su LinkedIn**](https://www.linkedin.com/search/results/people/?keywords={li_q})")
 
-        for p in prospects:
-            with st.container():
-                hdr_col1, hdr_col2 = st.columns([3, 1])
-                with hdr_col1:
-                    st.markdown(f"### 🏢 {p['company_name']} ({p['country']})")
-                    st.caption(f"Settore: `{p['sector']}` | Profilo: **{p['company_type']}** | Volume Stimato: **{p['estimated_annual_volume']}**")
-                with hdr_col2:
-                    st.markdown(f"[🔗 **Cerca Buyer su LinkedIn**]({p['linkedin_url']})")
-
-                c_d1, c_d2 = st.columns(2)
-                with c_d1:
-                    st.markdown(f"📦 **Pacchetto Cavi Consigliato:**\n- {p['target_cables']}")
-                    st.markdown(f"🏗️ **Progetti Tipici & Ambiti:**\n- {p['typical_projects']}")
-                with c_d2:
-                    st.markdown("**🎯 Ruoli Decision Maker / Buyer Target:**")
-                    for role in p["target_buyer_roles"]:
-                        st.markdown(f"- 👤 *{role}*")
-
-                st.divider()
+                    try:
+                        _reasons = json.loads(p["score_reasons"] or "[]")
+                    except (json.JSONDecodeError, TypeError):
+                        _reasons = []
+                    if _reasons:
+                        st.caption(" • ".join(_reasons))
+                    if p["scraped_context"]:
+                        with st.expander("🌐 Contesto dal sito ufficiale"):
+                            st.caption(p["scraped_context"][:900])
+                    st.divider()
+        else:
+            st.info("Nessun prospect nel DB dinamico. Clicca **'🔄 Aggiorna Prospect'** per popolarlo da ERP + Wikidata + bandi, oppure consulta la lista seme qui sotto.")
+            st.markdown("#### 📋 Lista seme (curata manualmente)")
+            prospects = get_lookalike_prospects(
+                country_filter=sel_country,
+                sector_filter=sel_sector,
+                search_query=search_prospect,
+            )
+            for p in prospects:
+                with st.container():
+                    hdr_col1, hdr_col2 = st.columns([3, 1])
+                    with hdr_col1:
+                        st.markdown(f"### 🏢 {p['company_name']} ({p['country']})")
+                        st.caption(f"Settore: `{p['sector']}` | Profilo: **{p['company_type']}**")
+                    with hdr_col2:
+                        st.markdown(f"[🔗 **Cerca Buyer su LinkedIn**]({p['linkedin_url']})")
+                    st.divider()
 
     # --------------------------------------------------------------------------
     # SUB-TAB 2: GENERATORE OUTREACH MULTILINGUA
@@ -1037,7 +1083,10 @@ if section == _SECTIONS[5]:
         st.markdown("### ✉️ Generatore AI di Outreach Commerciale Personalizzato")
         st.caption("Crea istantaneamente email formali, messaggi InMail per LinkedIn e script per telefonata fredda, calibrati sul settore e sulle certificazioni dei cavi.")
 
-        preset_names = [p["company_name"] for p in LOOKALIKE_PROSPECTS_DB]
+        # Prospect dal DB dinamico (prima) + lista seme come fallback
+        _db_names = [p["company_name"] for p in db.get_prospects(limit=300)]
+        _seed_names = [p["company_name"] for p in LOOKALIKE_PROSPECTS_DB]
+        preset_names = list(dict.fromkeys(_db_names + _seed_names))
         col_o1, col_o2, col_o3 = st.columns([1.5, 1, 1])
 
         with col_o1:
@@ -1088,6 +1137,12 @@ if section == _SECTIONS[5]:
             if not final_company_target:
                 st.warning("⚠️ Inserisci o seleziona il nome dell'azienda target.")
             else:
+                # Contesto scraped dal DB se il prospect selezionato esiste
+                _prow = next((p for p in db.get_prospects(limit=300)
+                              if p["company_name"] == final_company_target), None)
+                _scraped = _prow["scraped_context"] if _prow and _prow["scraped_context"] else ""
+                _src = _prow["source_type"] if _prow else "MANUALE"
+
                 with st.spinner(f"Elaborazione outreach personalizzato per {final_company_target}..."):
                     outreach_res = generate_multilingual_outreach(
                         company_name=final_company_target,
@@ -1097,9 +1152,21 @@ if section == _SECTIONS[5]:
                         specific_project=ctx_project,
                         cable_focus=ctx_cables,
                         provider=selected_provider,
+                        scraped_context=_scraped,
+                        source_type=_src,
+                        area_manager=area_for_country(outreach_country),
                     )
 
                 st.success(f"✅ Proposta commerciale generata per **{final_company_target}**!")
+                _meta_bits = []
+                if outreach_res.get("fonte_dato"):
+                    _meta_bits.append(f"Fonte lead: `{outreach_res['fonte_dato']}`")
+                if outreach_res.get("area_manager_assegnato"):
+                    _meta_bits.append(f"Area: `{outreach_res['area_manager_assegnato']}`")
+                if outreach_res.get("evidenze_sito_web"):
+                    _meta_bits.append("Contesto sito analizzato")
+                if _meta_bits:
+                    st.caption(" · ".join(_meta_bits))
 
                 t_mail, t_li, t_call = st.tabs(["✉️ Bozza Email", "💼 Messaggio LinkedIn / InMail", "📞 Script Cold Call"])
 

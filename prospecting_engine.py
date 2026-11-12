@@ -7,11 +7,22 @@ Fornisce:
    in Italiano, Inglese, Francese e Tedesco tramite Ollama locale (o fallback euristico professionale).
 3. Ricerca referenti target LinkedIn e match con gamma prodotti cavi.
 """
+import difflib
 import json
 import re
+import time
+from datetime import datetime
+from html import unescape as _html_unescape
 from typing import Optional
+
 import requests
-from config import AZIENDA
+
+import db
+import sqlserver_orders as sso
+from company_enrich import enrich_company, industry_qids
+from config import AZIENDA, COUNTRY_TO_AREA
+from crm_analyzer import (get_suggested_cable_solution,
+                          normalize_company_name)
 from llm import generate_json_completion, is_llm_available
 
 # ==============================================================================
@@ -249,6 +260,307 @@ def get_lookalike_prospects(
 
 
 # ==============================================================================
+# PIPELINE PROSPECT DINAMICA (ERP dedup + Wikidata + scraping + score)
+# ==============================================================================
+
+_ERP_MIN_RATIO = 0.85          # soglia fuzzy match vs anagrafica ERP
+_ERP_CACHE_TTL = 600           # ricarica anagrafica ERP ogni 10 min
+_MAX_SCRAPE_CHARS = 3000
+_QUALIFY_SCORE = 65            # soglia minima per outreach automatico
+_SCRAPE_UA = {"User-Agent": "MB-SalesMetriks/1.0 (sales intelligence)"}
+_WD_SPARQL = "https://query.wikidata.org/sparql"
+
+_TAG_RE = re.compile(r"<[^>]+>")
+_SCRIPT_RE = re.compile(r"<(script|style)[^>]*>.*?</\1>",
+                        re.DOTALL | re.IGNORECASE)
+_WS_RE = re.compile(r"\s+")
+
+# Paesi commerciali coperti (NLD = Benelux, gestito dall'area FRANCE)
+_COUNTRY_AREA = {**COUNTRY_TO_AREA, "NLD": "FRANCE"}
+_ISO2_TO_ISO3 = {cc[:2]: cc for cc in _COUNTRY_AREA}
+_COUNTRY_NAME_TO_ISO3 = {
+    "francia": "FRA", "germania": "DEU", "austria": "AUT", "svizzera": "CHE",
+    "spagna": "ESP", "portogallo": "PRT", "belgio": "BEL",
+    "lussemburgo": "LUX", "svezia": "SWE", "danimarca": "DNK",
+    "finlandia": "FIN", "norvegia": "NOR", "regno unito": "GBR",
+    "irlanda": "IRL", "polonia": "POL", "repubblica ceca": "CZE",
+    "slovacchia": "SVK", "ungheria": "HUN", "romania": "ROU",
+    "bulgaria": "BGR", "croazia": "HRV", "slovenia": "SVN",
+    "grecia": "GRC", "lituania": "LTU", "lettonia": "LVA",
+    "estonia": "EST", "paesi bassi": "NLD", "olanda": "NLD",
+    "italia": "ITA",
+}
+
+_SECTOR_KEYWORDS = {
+    "Ferroviario": ["rail", "ferrov", "rolling stock", "materiale rotabile",
+                    "signalling", "segnalamento", "ertms", "tramway",
+                    "metro line"],
+    "Navale": ["naval", "navy", "marine", "shipyard", "cantiere navale",
+               "shipbuilding", "offshore"],
+    "Avio/Difesa": ["aerospace", "avio", "aeronaut", "defense", "defence",
+                    "difesa"],
+    "Telecom/Provider": ["telecom", "ftth", "fibra ottica", "fibre optic",
+                         "open fiber", "5g", "broadband", "network operator",
+                         "backhaul"],
+    "Data Center": ["data center", "datacenter", "data centre", "hyperscale",
+                    "colocation", "cloud infrastructure"],
+}
+_TECH_KEYWORDS = [
+    "en 45545", "en 50306", "en 50264", "en 50173", "en 50200", "cpr",
+    "b2ca", "lszh", "rina", "dnv", "bureau veritas", "lloyd", "mil-dtl",
+    "halogen-free", "halogen free", "fire resistant", "om4", "om5",
+    "g.657", "cat 8", "cat 6a", "structured cabling",
+]
+
+_ERP_IDX: dict | None = None
+_ERP_IDX_AT = 0.0
+
+
+def _erp_customer_index() -> dict:
+    """Nome normalizzato -> ragione sociale ERP (cache 10 min)."""
+    global _ERP_IDX, _ERP_IDX_AT
+    if _ERP_IDX is not None and time.time() - _ERP_IDX_AT < _ERP_CACHE_TTL:
+        return _ERP_IDX
+    idx = {}
+    try:
+        df = sso.fetch_clients_list()
+        for raw in df["client_name"].fillna("").astype(str):
+            norm = normalize_company_name(raw)
+            if norm:
+                idx[norm] = raw.strip()
+    except Exception as exc:
+        db.log_error("erp", target="prospecting",
+                     error_type=type(exc).__name__, message=str(exc))
+    _ERP_IDX, _ERP_IDX_AT = idx, time.time()
+    return idx
+
+
+def check_erp_customer(company_name: str) -> tuple[bool, str]:
+    """True se il prospect corrisponde a un cliente ERP (fuzzy >= 85%
+    o inclusione): tali lead sono esclusi dal New Business."""
+    norm = normalize_company_name(company_name)
+    if not norm:
+        return False, ""
+    for norm_erp, raw_erp in _erp_customer_index().items():
+        if (norm == norm_erp or norm in norm_erp or norm_erp in norm
+                or difflib.SequenceMatcher(None, norm, norm_erp).ratio()
+                >= _ERP_MIN_RATIO):
+            return True, raw_erp
+    return False, ""
+
+
+def scrape_site_context(url: str,
+                        max_chars: int = _MAX_SCRAPE_CHARS) -> str:
+    """Estrae testo leggibile dalla homepage del prospect (max `max_chars`)."""
+    try:
+        r = requests.get(url, headers=_SCRAPE_UA, timeout=10,
+                         allow_redirects=True)
+        if r.status_code >= 400:
+            return ""
+        txt = _SCRIPT_RE.sub(" ", r.text[:800_000])
+        txt = _TAG_RE.sub(" ", txt)
+        txt = _WS_RE.sub(" ", _html_unescape(txt)).strip()
+        return txt[:max_chars]
+    except requests.RequestException:
+        return ""
+
+
+def compute_match_score(sector: str | None, country_code: str | None,
+                        context: str,
+                        has_recent_signal: bool) -> tuple[int, list[str]]:
+    """Score 0-100: settore +40, area prioritaria +25, keyword tecniche
+    nel testo del sito +25, segnale commerciale <90gg +10."""
+    score, reasons = 0, []
+    if sector:
+        score += 40
+        reasons.append(f"+40 settore target: {sector}")
+    cc = (country_code or "").upper()
+    if cc in _COUNTRY_AREA:
+        score += 25
+        reasons.append(f"+25 area prioritaria ({_COUNTRY_AREA[cc]})")
+    low = (context or "").lower()
+    hits = sorted({k for k in _TECH_KEYWORDS if k in low})
+    if hits:
+        score += 25
+        reasons.append(f"+25 keyword tecniche sito: {', '.join(hits[:5])}")
+    if has_recent_signal:
+        score += 10
+        reasons.append("+10 segnale commerciale attivo (< 90 gg)")
+    return min(score, 100), reasons
+
+
+def _sector_from_industries(labels: list) -> str | None:
+    low = " ".join(str(x) for x in labels).lower()
+    for sec, kws in _SECTOR_KEYWORDS.items():
+        if any(k in low for k in kws):
+            return sec
+    return None
+
+
+def _opportunity_target_candidates() -> list[dict]:
+    """Aziende reali rilevate come target nei bandi TED / news."""
+    out = []
+    for t in db.opportunity_targets():
+        name = (t["target_company"] or "").strip()
+        if not name:
+            continue
+        recent = False
+        try:
+            last = (t.get("last_seen") or "")[:19]
+            recent = (datetime.now()
+                      - datetime.fromisoformat(last)).days <= 90
+        except ValueError:
+            pass
+        out.append({"company_name": name,
+                    "country_code": t.get("country") or "",
+                    "sector": t.get("sector"),
+                    "source_type": "DB_OPPORTUNITY",
+                    "has_signal": recent})
+    return out
+
+
+def _seed_candidates() -> list[dict]:
+    """Le ~30 aziende curate della lista statica usate come semi."""
+    return [{"company_name": p["company_name"],
+             "country_code": p.get("country_code") or
+                 _COUNTRY_NAME_TO_ISO3.get(str(p.get("country", "")).lower(), ""),
+             "sector": p.get("sector"),
+             "source_type": "WIKIDATA_SEED", "has_signal": False}
+            for p in LOOKALIKE_PROSPECTS_DB]
+
+
+def _wikidata_candidates(seeds: list[dict],
+                         max_per_seed: int = 8) -> list[dict]:
+    """Lookalike via SPARQL: stessa industry (P452) del seed, HQ in paesi
+    target (P17 -> ISO2) e sito ufficiale (P856). Esclude ITA."""
+    out, seen = [], set()
+    for seed in seeds:
+        qids = industry_qids(seed["company_name"])
+        if not qids:
+            continue
+        vals = " ".join(f"wd:{q}" for q in qids)
+        query = (
+            "SELECT ?c ?cLabel ?iso2 ?site WHERE {\n"
+            f"  VALUES ?ind {{ {vals} }}\n"
+            "  ?c wdt:P452 ?ind; wdt:P17 ?country; wdt:P856 ?site.\n"
+            "  ?country wdt:P297 ?iso2.\n"
+            '  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }\n'
+            f"}} LIMIT {max_per_seed * len(qids)}"
+        )
+        try:
+            r = requests.get(
+                _WD_SPARQL, params={"query": query, "format": "json"},
+                headers=_SCRAPE_UA, timeout=30)
+            rows = r.json().get("results", {}).get("bindings", [])
+        except (requests.RequestException, ValueError):
+            continue
+        for row in rows[:max_per_seed]:
+            name = row.get("cLabel", {}).get("value", "")
+            iso3 = _ISO2_TO_ISO3.get(
+                row.get("iso2", {}).get("value", "").upper(), "")
+            if not name or not iso3 or iso3 == "ITA" or name in seen:
+                continue
+            seen.add(name)
+            out.append({"company_name": name, "country_code": iso3,
+                        "sector": seed.get("sector"),
+                        "website_url": row.get("site", {}).get("value"),
+                        "source_type": "WIKIDATA_SEED", "has_signal": False})
+        time.sleep(0.5)  # politeness su endpoint pubblico
+    return out
+
+
+def area_for_country(country: str) -> str:
+    """Area manager di competenza da codice ISO / nome paese."""
+    if not country:
+        return ""
+    cc = country.strip().upper()
+    if cc in _COUNTRY_AREA:
+        return _COUNTRY_AREA[cc]
+    if len(cc) == 2:
+        return _COUNTRY_AREA.get(_ISO2_TO_ISO3.get(cc, ""), "")
+    return _COUNTRY_AREA.get(_COUNTRY_NAME_TO_ISO3.get(cc.lower(), ""), "")
+
+
+def refresh_prospects(scrape: bool = True, wikidata_expand: bool = True,
+                      max_scrapes: int = 15, max_enrich: int = 10,
+                      max_seeds_exp: int = 5) -> dict:
+    """Pipeline prospect: opportunities -> seeds -> Wikidata lookalike ->
+    dedup ERP -> enrichment -> scraping -> score -> upsert."""
+    summary = {"candidates": 0, "skipped_erp": 0, "enriched": 0,
+               "scraped": 0, "qualified": 0, "upserted": 0}
+
+    candidates = _opportunity_target_candidates() + _seed_candidates()
+    if wikidata_expand:
+        candidates += _wikidata_candidates(
+            LOOKALIKE_PROSPECTS_DB[:max_seeds_exp])
+    summary["candidates"] = len(candidates)
+
+    seen_norm, scrapes, enriches = set(), 0, 0
+    for c in candidates:
+        name = c["company_name"].strip()
+        norm = normalize_company_name(name)
+        if not norm or norm in seen_norm:
+            continue
+        seen_norm.add(norm)
+
+        # --- Fase A: esclusione gia' clienti ERP ---
+        is_erp, erp_name = check_erp_customer(name)
+        if is_erp:
+            summary["skipped_erp"] += 1
+            db.upsert_prospect({
+                "company_name": name,
+                "country_code": c.get("country_code") or "",
+                "sector": c.get("sector"), "source_type": c["source_type"],
+                "is_erp_customer": 1, "erp_match_name": erp_name,
+                "match_score": 0, "status": "EXISTING_CUSTOMER",
+                "last_analyzed_at": datetime.now().isoformat(
+                    timespec="seconds")})
+            continue
+
+        # --- Fase B: dati pubblici Wikidata (sito / settore) ---
+        website = c.get("website_url")
+        if (not website or not c.get("sector")) and enriches < max_enrich:
+            info = enrich_company(name)
+            if info:
+                enriches += 1
+                website = website or info.get("website")
+                if not c.get("sector"):
+                    c["sector"] = (_sector_from_industries(
+                        info.get("industries", [])) or c.get("sector"))
+
+        # --- Fase C: scraping sito + score dinamico ---
+        context = ""
+        if scrape and website and scrapes < max_scrapes:
+            context = scrape_site_context(website)
+            if context:
+                scrapes += 1
+        score, reasons = compute_match_score(
+            c.get("sector"), c.get("country_code"),
+            context, c.get("has_signal"))
+        cables = (get_suggested_cable_solution(c["sector"], "", context)
+                  if c.get("sector") else None)
+        status = "READY_FOR_REVIEW" if score >= _QUALIFY_SCORE else "NEW"
+        db.upsert_prospect({
+            "company_name": name,
+            "country_code": c.get("country_code") or "",
+            "sector": c.get("sector"), "website_url": website,
+            "source_type": c["source_type"], "is_erp_customer": 0,
+            "scraped_context": context or None, "match_score": score,
+            "score_reasons": json.dumps(reasons, ensure_ascii=False),
+            "suggested_cables": json.dumps(cables, ensure_ascii=False)
+                if cables else None,
+            "status": status,
+            "last_analyzed_at": datetime.now().isoformat(
+                timespec="seconds")})
+        summary["upserted"] += 1
+        if status == "READY_FOR_REVIEW":
+            summary["qualified"] += 1
+
+    summary["enriched"], summary["scraped"] = enriches, scrapes
+    return summary
+
+
+# ==============================================================================
 # GENERATORE OUTREACH AI MULTILINGUA
 # ==============================================================================
 
@@ -322,18 +634,32 @@ def generate_multilingual_outreach(
     specific_project: str = "",
     cable_focus: str = "",
     provider: str | None = None,
+    scraped_context: str = "",
+    source_type: str = "",
+    area_manager: str = "",
 ) -> dict:
-    """Genera bozze email, LinkedIn e script telefonico personalizzati."""
+    """Genera bozze email, LinkedIn e script telefonico personalizzati.
+    scraped_context: estratto reale dal sito del prospect (pre-outreach)."""
     lang = language.lower() if language.lower() in OUTREACH_PROMPTS else "it"
     prompt_cfg = OUTREACH_PROMPTS[lang]
+
+    extras = {
+        "fonte_dato": source_type or "MANUALE",
+        "evidenze_sito_web": (scraped_context[:250] + "…") if scraped_context else "",
+        "area_manager_assegnato": area_manager or area_for_country(country),
+    }
 
     user_context = (
         f"AZIENDA TARGET: {company_name}\n"
         f"PAESE: {country}\n"
         f"SETTORE CORE: {sector}\n"
+        f"FONTE DEL LEAD: {source_type or 'n/d'}\n"
         f"PROGETTO O COMMESSA RILEVATA: {specific_project or 'Progetti e cantieri in corso nel mercato'}\n"
         f"GAMMA CAVI DI INTERESSE: {cable_focus or 'Fibra ottica ad alta densità G.657.A1 / Rame CPR B2ca / Cavi speciali'}\n"
     )
+    if scraped_context:
+        user_context += (f"CONTESTO ESTRATTO DAL SITO UFFICIALE DEL PROSPECT:\n"
+                         f"{scraped_context[:2000]}\n")
 
     if is_llm_available(provider) and company_name.strip():
         data, used_p = generate_json_completion(
@@ -343,11 +669,12 @@ def generate_multilingual_outreach(
         )
         if data and "email_body" in data and "subject" in data:
             data["generated_by"] = used_p
+            data.update(extras)
             return data
 
     # Fallback euristico professionale per lingua
     if lang == "en":
-        return {
+        result = {
             "subject": f"Special Cables & Optical Fiber Supply Partnership for {company_name}",
             "email_body": (
                 f"Dear Procurement and Technical Team at {company_name},\n\n"
@@ -368,7 +695,7 @@ def generate_multilingual_outreach(
             ),
         }
     elif lang == "fr":
-        return {
+        result = {
             "subject": f"Partenariat Câbles Spéciaux & Fibre Optique pour les projets {company_name}",
             "email_body": (
                 f"Madame, Monsieur du Département Achats et Projets de {company_name},\n\n"
@@ -388,7 +715,7 @@ def generate_multilingual_outreach(
             ),
         }
     elif lang == "de":
-        return {
+        result = {
             "subject": f"Direktbezug Spezialkabel (LWL & Kupfer) für Ihre Projekte bei {company_name}",
             "email_body": (
                 f"Sehr geehrtes Einkaufs- und Projektteam von {company_name},\n\n"
@@ -408,7 +735,7 @@ def generate_multilingual_outreach(
             ),
         }
     else:  # Italiano
-        return {
+        result = {
             "subject": f"Fornitura Diretta Cavi Speciali (Fibra & Rame) per i progetti {company_name}",
             "email_body": (
                 f"Gentile Team Acquisti e Direzione Tecnica di {company_name},\n\n"
@@ -428,3 +755,6 @@ def generate_multilingual_outreach(
                 "🛡️ GESTIONE OBIEZIONE 'Abbiamo già accordi quadro': 'Comprendo benissimo; molti dei nostri clienti ci hanno inizialmente testato su lotti specifici o per ridurre i tempi di attesa. Le lascio la nostra scheda di gamma così da averci come punto di riferimento immediato per il prossimo capitolato.'"
             ),
         }
+
+    result.update(extras)
+    return result

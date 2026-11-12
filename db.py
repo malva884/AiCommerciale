@@ -55,6 +55,26 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     calls  INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (day, key_id)
 );
+
+--- Prospect europei qualificati dal motore New Business / Lookalike
+CREATE TABLE IF NOT EXISTS prospects_europa (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_name    TEXT NOT NULL,          -- ragione sociale normalizzata
+    country_code    TEXT NOT NULL DEFAULT '', -- codice ISO paese
+    sector          TEXT,                   -- settore target
+    website_url     TEXT,                   -- sito ufficiale verificato
+    source_type     TEXT,                   -- DB_OPPORTUNITY | WIKIDATA_SEED | EXTERNAL_IMPORT
+    is_erp_customer INTEGER NOT NULL DEFAULT 0, -- 1 = gia' cliente ERP (escluso)
+    erp_match_name  TEXT,                   -- nome cliente ERP che ha matchato
+    scraped_context TEXT,                   -- estratto testo dal sito ufficiale
+    match_score     INTEGER NOT NULL DEFAULT 0, -- 0-100
+    score_reasons   TEXT,                   -- JSON list: motivi del punteggio
+    suggested_cables TEXT,                  -- JSON list cavi/certificazioni compatibili
+    outreach_payload TEXT,                  -- JSON email/linkedin generato
+    status          TEXT NOT NULL DEFAULT 'NEW', -- NEW | READY_FOR_REVIEW | APPROVED_SENT | DISCARDED | EXISTING_CUSTOMER
+    last_analyzed_at TEXT,
+    UNIQUE(company_name, country_code)
+);
 """
 
 
@@ -328,3 +348,113 @@ def delete_resolved_errors() -> int:
     with _connect() as conn:
         cur = conn.execute("DELETE FROM fetch_errors WHERE resolved=1")
         return cur.rowcount
+
+
+# ----------------------------------------------------------------------------
+# PROSPECT EUROPA (New Business / Lookalike engine)
+# ----------------------------------------------------------------------------
+
+def upsert_prospect(p: dict) -> int:
+    """Inserisce/aggiorna un prospect. Chiave naturale: (company_name, country_code)."""
+    with _connect() as conn:
+        conn.execute(
+            """INSERT INTO prospects_europa
+               (company_name, country_code, sector, website_url, source_type,
+                is_erp_customer, erp_match_name, scraped_context, match_score,
+                score_reasons, suggested_cables, outreach_payload, status,
+                last_analyzed_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(company_name, country_code) DO UPDATE SET
+                sector          = COALESCE(excluded.sector, sector),
+                website_url     = COALESCE(excluded.website_url, website_url),
+                source_type     = COALESCE(excluded.source_type, source_type),
+                is_erp_customer = excluded.is_erp_customer,
+                erp_match_name  = COALESCE(excluded.erp_match_name, erp_match_name),
+                scraped_context = COALESCE(excluded.scraped_context, scraped_context),
+                match_score     = excluded.match_score,
+                score_reasons   = COALESCE(excluded.score_reasons, score_reasons),
+                suggested_cables = COALESCE(excluded.suggested_cables, suggested_cables),
+                outreach_payload = COALESCE(excluded.outreach_payload, outreach_payload),
+                status          = excluded.status,
+                last_analyzed_at = excluded.last_analyzed_at""",
+            (p["company_name"], p.get("country_code") or "",
+             p.get("sector"), p.get("website_url"), p.get("source_type"),
+             1 if p.get("is_erp_customer") else 0, p.get("erp_match_name"),
+             p.get("scraped_context"), int(p.get("match_score") or 0),
+             p.get("score_reasons"), p.get("suggested_cables"),
+             p.get("outreach_payload"), p.get("status") or "NEW",
+             p.get("last_analyzed_at")),
+        )
+        row = conn.execute(
+            "SELECT id FROM prospects_europa "
+            "WHERE company_name=? AND country_code=?",
+            (p["company_name"], p.get("country_code") or "")).fetchone()
+        return row["id"] if row else 0
+
+
+def get_prospects(status: str | None = None, min_score: int = 0,
+                  search: str = "", include_erp: bool = False,
+                  limit: int = 300) -> list[dict]:
+    """Prospect dal piu' qualificato; per default esclude i gia' clienti ERP."""
+    clauses = ["match_score >= ?"]
+    params: list = [min_score]
+    if not include_erp:
+        clauses.append("is_erp_customer = 0")
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    if search:
+        clauses.append("(company_name LIKE ? OR sector LIKE ? OR country_code LIKE ?)")
+        like = f"%{search}%"
+        params += [like, like, like]
+    params.append(limit)
+    with _connect() as conn:
+        return conn.execute(
+            f"""SELECT * FROM prospects_europa
+                WHERE {' AND '.join(clauses)}
+                ORDER BY match_score DESC, company_name LIMIT ?""",
+            params).fetchall()
+
+
+def update_prospect(prospect_id: int, fields: dict):
+    """Update parziale whitelistato su un prospect."""
+    allowed = {"status", "match_score", "scraped_context", "outreach_payload",
+               "score_reasons", "suggested_cables", "website_url", "sector",
+               "is_erp_customer", "erp_match_name", "last_analyzed_at"}
+    sets = [(k, v) for k, v in fields.items() if k in allowed]
+    if not sets:
+        return
+    sql = ", ".join(f"{k}=?" for k, _ in sets)
+    with _connect() as conn:
+        conn.execute(f"UPDATE prospects_europa SET {sql} WHERE id=?",
+                     [v for _, v in sets] + [prospect_id])
+
+
+def prospect_stats() -> dict:
+    """Conteggi per la dashboard prospect."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT status, COUNT(*) c, SUM(is_erp_customer) erp "
+            "FROM prospects_europa GROUP BY status").fetchall()
+        total = conn.execute(
+            "SELECT COUNT(*), COALESCE(AVG(match_score),0) "
+            "FROM prospects_europa").fetchone()
+    by_status = {r["status"]: r["c"] for r in rows}
+    return {"total": total[0], "avg_score": round(total[1] or 0, 1),
+            "by_status": by_status}
+
+
+def opportunity_targets() -> list[dict]:
+    """target_company reali rilevate da TED/News nel DB opportunita'."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT target_company,
+                      MAX(country) AS country,
+                      MAX(sector)  AS sector,
+                      MAX(created_at) AS last_seen,
+                      COUNT(*)     AS signals
+               FROM opportunities
+               WHERE target_company IS NOT NULL
+                     AND TRIM(target_company) != ''
+               GROUP BY target_company""").fetchall()
+    return [dict(r) for r in rows]

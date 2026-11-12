@@ -235,6 +235,18 @@ def enrich_company(name: str) -> dict:
     }
 
 
+def industry_qids(name: str) -> list[str]:
+    """QID Wikidata dei settori industriali (P452) dell'azienda.
+    Usati per l'espansione lookalike via SPARQL. [] se non trovata."""
+    hit = _search_entity(name)
+    if not hit:
+        return []
+    data = _get({"action": "wbgetentities", "ids": hit["id"],
+                 "props": "claims", "format": "json"})
+    entity = data.get("entities", {}).get(hit["id"], {})
+    return _entity_ids(entity.get("claims", {}).get("P452", []), cap=3)
+
+
 def format_amount(v: float | None, symbol: str = "€") -> str:
     """18_692_900_000 -> '18.7 Mrd€'."""
     if v is None:
