@@ -149,45 +149,48 @@ def _call_gemini_json(system_prompt: str, user_prompt: str,
                       api_key: str | None = None,
                       model: str | None = None,
                       timeout: int | None = None) -> dict | None:
-    """Chiamata REST a Google Gemini con JSON mode attivo."""
+    """Chiamata REST a Google Gemini (Interactions API) con output JSON."""
     key = api_key or _RUNTIME_GEMINI_KEY or GEMINI_API_KEY
     if not key:
         return None
 
     mdl = model or _RUNTIME_GEMINI_MODEL or GEMINI_MODEL
-    url = GEMINI_API_URL.format(model=mdl)
+    url = GEMINI_API_URL.format(model=mdl)  # no-op se l'URL non contiene {model}
     payload = {
-        "system_instruction": {
-            "parts": [{"text": system_prompt}]
+        "model": mdl,
+        "input": f"{system_prompt}\n\n{user_prompt}",
+        "generation_config": {
+            "thinking_level": "minimal",  # scoring JSON: niente reasoning esteso
         },
-        "contents": [
-            {
-                "role": "user",
-                "parts": [{"text": user_prompt}]
-            }
-        ],
-        "generationConfig": {
-            "response_mime_type": "application/json",
-            "temperature": 0.2
-        }
     }
 
     try:
         resp = requests.post(
             url,
             params={"key": key},
+            headers={"x-goog-api-key": key},
             json=payload,
             timeout=timeout or GEMINI_TIMEOUT,
         )
-        resp.raise_for_status()
-        data = resp.json()
-        candidates = data.get("candidates", [])
-        if not candidates:
+        if resp.status_code != 200:
+            print(f"[llm] Gemini HTTP {resp.status_code}: {resp.text[:300]}", flush=True)
             return None
-        raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+        data = resp.json()
+        texts = [
+            part.get("text", "")
+            for step in data.get("steps", [])
+            if step.get("type") == "model_output"
+            for part in step.get("content", [])
+            if part.get("type") == "text"
+        ]
+        raw_text = texts[-1] if texts else ""
+        if not raw_text:
+            print(f"[llm] Gemini: risposta senza testo: {str(data)[:300]}", flush=True)
+            return None
         m = _JSON_RE.search(raw_text)
         return json.loads(m.group(0)) if m else json.loads(raw_text)
-    except (requests.RequestException, ValueError, KeyError, IndexError):
+    except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as e:
+        print(f"[llm] Gemini errore: {type(e).__name__}: {e}", flush=True)
         return None
 
 
@@ -214,7 +217,8 @@ def _call_ollama_json(system_prompt: str, user_prompt: str,
         content = resp.json()["message"]["content"]
         m = _JSON_RE.search(content)
         return json.loads(m.group(0)) if m else json.loads(content)
-    except (requests.RequestException, ValueError, KeyError, IndexError):
+    except (requests.RequestException, ValueError, KeyError, IndexError) as e:
+        print(f"[llm] Ollama errore: {type(e).__name__}: {e}", flush=True)
         return None
 
 
@@ -239,6 +243,7 @@ def generate_json_completion(
             return data, "gemini"
         # Fallback automatico a Ollama se disponibile
         if ollama_available():
+            print("[llm] Gemini non riuscito -> fallback su Ollama", flush=True)
             data = _call_ollama_json(system_prompt, user_prompt, model=model, timeout=timeout)
             if data is not None:
                 return data, "ollama"
@@ -249,6 +254,7 @@ def generate_json_completion(
             return data, "ollama"
         # Fallback automatico a Gemini se configurato
         if gemini_available(api_key):
+            print("[llm] Ollama non riuscito -> fallback su Gemini", flush=True)
             data = _call_gemini_json(system_prompt, user_prompt, api_key=api_key, model=model, timeout=timeout)
             if data is not None:
                 return data, "gemini"
