@@ -113,15 +113,22 @@ def _env_set(key: str, value: str):
         f.writelines(lines)
 
 
-def _persist_gemini_keys():
-    """on_change dei campi chiave Gemini: salva su .env cosi' le chiavi
-    sopravvivono al refresh pagina e al riavvio dell'app."""
+def _persist_llm_settings():
+    """on_change dei widget Motore AI: salva provider, chiavi, modelli e flag
+    fallback su .env — sopravvivono a refresh pagina e riavvio dell'app."""
+    label = st.session_state.get("provider_radio", "")
+    _env_set("LLM_PROVIDER",
+             "gemini" if "Gemini" in label else "ollama")
     _env_set("GEMINI_API_KEY",
              st.session_state.get("gemini_api_key", "").strip())
     _env_set("GEMINI_API_KEYS",
              ",".join(k.strip() for k in re.split(
                  r"[,\s]+", st.session_state.get("gemini_extra_keys", ""))
                  if k.strip()))
+    _env_set("GEMINI_MODEL", st.session_state.get("gemini_model_sel", ""))
+    _env_set("OLLAMA_MODEL", st.session_state.get("ollama_model_sel", ""))
+    _env_set("DISABLE_OLLAMA_FALLBACK",
+             "1" if st.session_state.get("no_ollama_fallback") else "0")
 
 
 # ==============================================================================
@@ -386,7 +393,8 @@ if section == _SECTIONS[6]:
         llm_options,
         horizontal=True,
         key="provider_radio",
-        help="Scegli se usare il modello locale (Ollama) o l'AI cloud aziendale (Google Gemini)."
+        on_change=_persist_llm_settings,
+        help="Scegli se usare il modello locale (Ollama) o l'AI cloud aziendale (Google Gemini). La scelta e' salvata su .env."
     )
 
     if selected_provider == "gemini":
@@ -395,21 +403,23 @@ if section == _SECTIONS[6]:
             "Gemini API Key Aziendale",
             type="password",
             key="gemini_api_key",
-            on_change=_persist_gemini_keys,
+            on_change=_persist_llm_settings,
             help="Inserisci la chiave API aziendale di Google Gemini (AI Studio o Vertex AI). Salvata su .env: sopravvive a refresh e riavvio."
         )
         _k2.text_input(
             "Chiavi extra rotazione (comma-separated)",
             type="password",
             key="gemini_extra_keys",
-            on_change=_persist_gemini_keys,
+            on_change=_persist_llm_settings,
             help="Chiavi API aggiuntive da progetti diversi: quando una esaurisce la quota giornaliera, la successiva prende il suo posto."
         )
-        st.selectbox("Modello Gemini", gemini_models, key="gemini_model_sel")
+        st.selectbox("Modello Gemini", gemini_models, key="gemini_model_sel",
+                     on_change=_persist_llm_settings)
 
         st.checkbox(
             "⛔ Non usare Ollama se Gemini non funziona",
             key="no_ollama_fallback",
+            on_change=_persist_llm_settings,
             help="Se attivo e Gemini fallisce o esaurisce la quota, la pipeline "
                  "NON ripiega su Ollama locale: le opportunita' restano con "
                  "scoring euristico e vengono rinviate al prossimo run."
@@ -430,6 +440,7 @@ if section == _SECTIONS[6]:
         st.text_input(
             "Modello Ollama",
             key="ollama_model_sel",
+            on_change=_persist_llm_settings,
             help="Nome del modello in locale (es. llama3.1:8b, mistral:7b)."
         )
         if ollama_online:
