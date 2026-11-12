@@ -260,20 +260,75 @@ if section == _SECTIONS[0]:
             unsafe_allow_html=True)
 
     with col_agent:
+        # --- Dati reali per il triage del Sales Agent ---
+        _n_unscored = _stats["total"] - _stats["scored"]
+        _n_err_agent = db.unresolved_error_count()
+        with sqlite3.connect(DB_PATH) as conn:
+            _top_opp = conn.execute(
+                "SELECT title, score FROM opportunities "
+                "WHERE score IS NOT NULL "
+                "ORDER BY score DESC, id DESC LIMIT 1").fetchone()
+            _n_hot = conn.execute(
+                "SELECT COUNT(*) FROM opportunities WHERE score >= 70"
+            ).fetchone()[0]
+        _proc = st.session_state.get("pipeline_proc")
+        _pipe_running = _proc is not None and _proc.poll() is None
+
+        # Alert contestuale: la priorita' reale della giornata
+        if _pipe_running:
+            _alert = ("<b>Pipeline in esecuzione:</b> acquisizione e scoring "
+                      "delle fonti in corso.")
+        elif _n_unscored > 0:
+            _alert = (f"<b>Scoring da completare:</b> {_n_unscored} "
+                      f"opportunita' in attesa di valutazione AI.")
+        elif _n_err_agent > 0:
+            _alert = (f"<b>Fonti dati:</b> {_n_err_agent} errori di raccolta "
+                      "non risolti da verificare.")
+        elif _n_hot > 0:
+            _alert = (f"<b>Priorita' alta:</b> {_n_hot} opportunita' con "
+                      "score &ge; 70 richiedono un'azione commerciale.")
+        else:
+            _alert = ("<b>Tutto sotto controllo:</b> nessuna urgenza rilevata. "
+                      "Avvia un aggiornamento per cercare nuovi segnali.")
+
         st.markdown(
             '<div class="mk-agent-sidecard">' 
             '<div class="mk-agent-sidecard-title"><span style="font-size:1.2rem;">✨</span> Sales Agent</div>' 
-            '<div class="mk-agent-alert-box">' 
-            '<b>Avviso priorità:</b> Rilevate nuove gare con requisiti tecnici ad alta compatibilità per cavi speciali CPR B2ca e EN 50288.' 
-            '</div>' 
+            f'<div class="mk-agent-alert-box">{_alert}</div>' 
             '<div style="font-size:0.82rem; color:#818ba4; margin-bottom:10px; font-weight:600;">Azioni suggerite:</div>' 
             '</div>',
             unsafe_allow_html=True
         )
 
-        if st.button("🚀 Avvia Pipeline Dati", width="stretch", type="primary"):
-            st.session_state["nav_section"] = _SECTIONS[1]
+        # Stato quota AI corrente
+        if selected_provider == "gemini":
+            _quota = (config.GEMINI_DAILY_LIMIT * max(1, gemini_keys_count())
+                      - db.llm_calls_today())
+            st.caption(f"☁️ Quota Gemini residua oggi: ~{max(0, _quota)} chiamate")
+        else:
+            _ol = "🟢 online" if ollama_available() else "🔴 offline"
+            st.caption(f"🦙 Ollama {_ol}")
+
+        # Azioni contestuali
+        if _pipe_running:
+            st.button("🚀 Pipeline in esecuzione...", disabled=True,
+                      width="stretch")
+        elif st.button("🚀 Avvia Pipeline & Scoring AI", width="stretch",
+                       type="primary"):
+            st.session_state["pipeline_autostart"] = True
             st.rerun()
+
+        if _top_opp:
+            _lbl = f"🎯 Top: {_top_opp['title'][:38]}… (score {_top_opp['score']})"
+            if st.button(_lbl, width="stretch"):
+                st.session_state["nav_section"] = _SECTIONS[1]
+                st.rerun()
+
+        if _n_err_agent > 0 and not _pipe_running:
+            if st.button(f"⚠️ {_n_err_agent} errori fonti da verificare",
+                         width="stretch"):
+                st.session_state["nav_section"] = _SECTIONS[6]
+                st.rerun()
 
         if st.button("📄 Analizza Capitolato RFP", width="stretch"):
             st.session_state["nav_section"] = _SECTIONS[2]
