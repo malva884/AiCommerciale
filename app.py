@@ -179,42 +179,81 @@ if section == _SECTIONS[0]:
             unsafe_allow_html=True
         )
 
+        _per_page = 5
+        _total_opp = _stats["total"]
+        _n_pages = max(1, (_total_opp + _per_page - 1) // _per_page)
+        _page = min(st.session_state.get("opp_page", 1), _n_pages)
+        st.session_state["opp_page"] = _page
+
         with sqlite3.connect(DB_PATH) as conn:
             df_recent = pd.read_sql_query(
                 "SELECT title, country, sector, score, created_at FROM opportunities "
-                "ORDER BY id DESC LIMIT 5", conn
+                "ORDER BY id DESC LIMIT ? OFFSET ?", conn,
+                params=(_per_page, (_page - 1) * _per_page),
             )
 
         if not df_recent.empty:
             df_display = df_recent.copy()
-            df_display.columns = ["Titolo / Ente", "Paese", "Settore", "Score AI", "Data Rilevazione"]
+            df_display["country"] = df_display["country"].fillna("—")
+            df_display["sector"] = df_display["sector"].fillna("—")
+            df_display["score"] = pd.to_numeric(
+                df_display["score"], errors="coerce").fillna(0).astype(int)
+            df_display["created_at"] = pd.to_datetime(
+                df_display["created_at"], errors="coerce"
+            ).dt.strftime("%d/%m/%Y %H:%M").fillna("—")
+            df_display.columns = ["Titolo / Ente", "Paese", "Settore", "Score AI", "Data"]
             st.dataframe(
                 df_display,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     "Titolo / Ente": st.column_config.TextColumn("Titolo / Ente", width="large"),
                     "Paese": st.column_config.TextColumn("Paese", width="small"),
                     "Settore": st.column_config.TextColumn("Settore", width="medium"),
                     "Score AI": st.column_config.ProgressColumn("Score AI", min_value=0, max_value=100, format="%d pts"),
-                    "Data Rilevazione": st.column_config.TextColumn("Data", width="small"),
+                    "Data": st.column_config.TextColumn("Data", width="small"),
                 }
             )
         else:
             st.info("Nessuna opportunità ancora presente nel database. Clicca su 'Aggiorna Fonti & Pipeline' nella sidebar per iniziare.")
 
-        st.markdown(
-            '<div style="display:flex; justify-content:space-between; align-items:center; margin-top:12px; padding:10px 14px; background:#0f1526; border:1px solid #1a2238; border-radius:12px; font-size:0.82rem; color:#818ba4;">' 
-            f'<div>1-5 di {_stats["total"]} opportunità</div>' 
-            '<div style="display:flex; gap:6px;">' 
-            '<span style="background:#1c1538; border:1px solid #7c5cff; color:#fff; padding:2px 8px; border-radius:6px; font-weight:700;">1</span>' 
-            '<span style="padding:2px 8px; border-radius:6px;">2</span>' 
-            '<span style="padding:2px 8px; border-radius:6px;">3</span>' 
-            '</div>' 
-            '<div>5 per pagina</div>' 
-            '</div>',
-            unsafe_allow_html=True
-        )
+        # Barra di paginazione funzionante (stile Metriks: numeri, prev/next, '...')
+        _from = 0 if _total_opp == 0 else (_page - 1) * _per_page + 1
+        _to = min(_page * _per_page, _total_opp)
+        _lo = max(1, min(_page - 2, _n_pages - 4))
+        _win = list(range(_lo, min(_n_pages, _lo + 4) + 1))
+        _btns = []
+        if _win[0] > 1:
+            _btns += [("1", 1), ("…", None)]
+        _btns += [(str(_p), _p) for _p in _win]
+        if _win[-1] < _n_pages:
+            _btns += [("…", None), (str(_n_pages), _n_pages)]
+
+        _pg_l, _pg_c, _pg_r = st.columns([1.5, 2.4, 0.7])
+        _pg_l.markdown(
+            f'<div style="font-size:0.82rem; color:#818ba4; padding-top:8px;">'
+            f'{_from}-{_to} di {_total_opp} opportunità</div>',
+            unsafe_allow_html=True)
+        with _pg_c:
+            _bc = st.columns(len(_btns) + 2)
+            if _bc[0].button("‹", key="opp_prev", disabled=_page <= 1):
+                st.session_state["opp_page"] = _page - 1
+                st.rerun()
+            for _i, (_lbl, _p) in enumerate(_btns):
+                if _p is None:
+                    _bc[_i + 1].button(_lbl, key=f"opp_dots_{_i}", disabled=True)
+                elif _bc[_i + 1].button(
+                        _lbl, key=f"opp_p_{_p}",
+                        type="primary" if _p == _page else "secondary"):
+                    st.session_state["opp_page"] = _p
+                    st.rerun()
+            if _bc[-1].button("›", key="opp_next", disabled=_page >= _n_pages):
+                st.session_state["opp_page"] = _page + 1
+                st.rerun()
+        _pg_r.markdown(
+            f'<div style="font-size:0.82rem; color:#818ba4; padding-top:8px; text-align:right;">'
+            f'{_per_page} per pagina</div>',
+            unsafe_allow_html=True)
 
     with col_agent:
         st.markdown(
@@ -228,15 +267,15 @@ if section == _SECTIONS[0]:
             unsafe_allow_html=True
         )
 
-        if st.button("🚀 Avvia Pipeline Dati", use_container_width=True, type="primary"):
+        if st.button("🚀 Avvia Pipeline Dati", width="stretch", type="primary"):
             st.session_state["nav_section"] = _SECTIONS[1]
             st.rerun()
 
-        if st.button("📄 Analizza Capitolato RFP", use_container_width=True):
+        if st.button("📄 Analizza Capitolato RFP", width="stretch"):
             st.session_state["nav_section"] = _SECTIONS[2]
             st.rerun()
 
-        if st.button("✉️ Genera Outreach AI", use_container_width=True):
+        if st.button("✉️ Genera Outreach AI", width="stretch"):
             st.session_state["nav_section"] = _SECTIONS[5]
             st.rerun()
 
@@ -1274,9 +1313,9 @@ _n_err = db.unresolved_error_count()
 _pst = _pipeline_status()
 if _pst["state"] == "running":
     st.sidebar.info("🔄 Pipeline in esecuzione...")
-    st.sidebar.button("🚀 Aggiorna Pipeline", disabled=True, use_container_width=True)
+    st.sidebar.button("🚀 Aggiorna Pipeline", disabled=True, width="stretch")
 else:
-    if st.sidebar.button("🚀 Aggiorna Pipeline", use_container_width=True, type="primary"):
+    if st.sidebar.button("🚀 Aggiorna Pipeline", width="stretch", type="primary"):
         _start_pipeline()
         st.toast("Pipeline avviata in background!", icon="🚀")
         st.rerun()
