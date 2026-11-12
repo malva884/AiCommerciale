@@ -1,4 +1,5 @@
 """Fetch news da Google News RSS: fonte pubblica, nessuna chiave API."""
+import re
 import urllib.parse
 from html import unescape
 
@@ -6,6 +7,13 @@ import feedparser
 
 import db
 from config import NEWS_EDITIONS, MAX_NEWS_PER_QUERY
+
+
+def _clean_summary(raw: str) -> str:
+    """I summary RSS di Google News contengono markup (<a>, <font>):
+    restituisce solo il testo leggibile."""
+    txt = re.sub(r"<[^>]+>", " ", unescape(raw))
+    return re.sub(r"\s+", " ", txt).strip()
 
 _RSS = "https://news.google.com/rss/search?q={q}&hl={hl}&gl={gl}&ceid={ceid}"
 
@@ -70,6 +78,6 @@ def _fetch_query(query: str, lang: str, country: str,
             "published": entry.get("published"),
             "country": country_code,
             "area_manager": area_code,
-            "text": unescape(entry.get("summary", "")).strip(),
+            "text": _clean_summary(entry.get("summary", "")),
         })
     return results

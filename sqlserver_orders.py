@@ -11,7 +11,8 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
-from config import MATERIAL_CATEGORY_MAP, SQLSERVER_DB_URL
+from config import (MATERIAL_CATEGORY_MAP, SQLSERVER_DB_URL,
+                    SQLSERVER_PWD)
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,10 @@ def test_connection() -> dict:
 
 def fetch_raw_orders(limit: Optional[int] = None) -> pd.DataFrame:
     """Estrae lo storico ordini con anagrafica cliente e categoria materiale."""
+    if not SQLSERVER_PWD:
+        logger.warning("SQL Server non configurato (SQLSERVER_PWD assente): "
+                       "lettura ordini saltata.")
+        return pd.DataFrame()
     engine = get_engine()
     top_clause = f"TOP {int(limit)} " if limit else ""
     query = f"""
@@ -98,6 +103,10 @@ def fetch_raw_orders(limit: Optional[int] = None) -> pd.DataFrame:
 
 def fetch_clients_list() -> pd.DataFrame:
     """Estrae l'anagrafica clienti completa."""
+    if not SQLSERVER_PWD:
+        logger.warning("SQL Server non configurato (SQLSERVER_PWD assente): "
+                       "lettura clienti saltata.")
+        return pd.DataFrame()
     engine = get_engine()
     query = """
         SELECT 

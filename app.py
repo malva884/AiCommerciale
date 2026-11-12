@@ -508,7 +508,10 @@ if section == _SECTIONS[1]:
                         st.markdown(f"- **Argomento Commerciale:** *{cable_sol['pitch']}*")
 
                     if row["text"]:
-                        st.caption(f"📝 **Estratto Bando / News:** {row['text'][:400]}...")
+                        _clean_text = re.sub(
+                            r"\s+", " ",
+                            re.sub(r"<[^>]+>", " ", row["text"])).strip()
+                        st.caption(f"📝 **Estratto Bando / News:** {_clean_text[:400]}...")
 
                 with c_right:
                     st.write(f"**Fonte:** `{row['source'].upper()}`")
