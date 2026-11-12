@@ -65,71 +65,103 @@ def load_cached_erp_periodicity() -> pd.DataFrame:
 
 ui_style.inject_styles()
 ui_style.hero()
-ui_style.agent_cards()
 
 # ==============================================================================
 # SIDEBAR: RIMANDO CONFIG MOTORE AI (TAB ADMIN)
 # ==============================================================================
-st.sidebar.caption("🧠 Motore AI: configurazione nel tab '🔧 Admin & Logs'")
+st.sidebar.caption("🧠 Motore AI: configurazione nel sezione '🔧 Admin & Logs'")
 st.sidebar.divider()
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+_SECTIONS = [
+    "🏠 Panoramica",
     "🎯 Tender Intelligence & News",
     "📄 RFP & Capitolati Analyzer",
     "🏢 Account Research & Dossier",
     "📊 CRM & Retention Ordini",
     "🚀 New Business & Lookalike UE",
     "🔧 Admin & Logs",
-])
+]
+st.session_state.setdefault("nav_section", _SECTIONS[0])
+st.sidebar.markdown("**🧭 NAVIGAZIONE**")
+section = st.sidebar.radio("Sezioni", _SECTIONS, key="nav_section",
+                           label_visibility="collapsed")
 
 
 # ==============================================================================
-# ADMIN TAB - SEZIONE 1: MOTORE AI (eseguita prima dei tab che usano l'LLM)
+# STATO MOTORE AI: eseguito a OGNI rerun (letto da session_state, non dai widget)
 # ==============================================================================
-with tab6:
+llm_options = ["🦙 Ollama (Locale)", "☁️ Google Gemini (Aziendale)"]
+gemini_models = ["gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3.6-flash",
+                 "gemini-3.8-flash", "gemini-3.7-flash", "gemini-flash-latest",
+                 "gemini-pro-latest"]
+
+st.session_state.setdefault("provider_radio",
+                            llm_options[1] if config.LLM_PROVIDER == "gemini" else llm_options[0])
+st.session_state.setdefault("gemini_api_key", config.GEMINI_API_KEY)
+st.session_state.setdefault("gemini_extra_keys", "")
+st.session_state.setdefault("gemini_model_sel",
+                            config.GEMINI_MODEL if config.GEMINI_MODEL in gemini_models
+                            else "gemini-3.1-flash-lite")
+st.session_state.setdefault("ollama_model_sel", config.OLLAMA_MODEL)
+
+selected_llm_label = st.session_state["provider_radio"]
+selected_provider = "gemini" if "Gemini" in selected_llm_label else "ollama"
+gemini_key_input = st.session_state["gemini_api_key"]
+gemini_extra_input = st.session_state["gemini_extra_keys"]
+selected_gemini_model = st.session_state["gemini_model_sel"]
+selected_ollama_model = st.session_state["ollama_model_sel"]
+
+extra_keys = [k.strip() for k in re.split(r"[,\s]+", gemini_extra_input) if k.strip()]
+ui_keys = ([gemini_key_input.strip()] if gemini_key_input.strip() else []) + extra_keys
+set_gemini_keys(ui_keys)
+if selected_provider == "gemini":
+    set_active_provider("gemini", api_key=gemini_key_input,
+                        gemini_model=selected_gemini_model)
+else:
+    set_active_provider("ollama", ollama_model=selected_ollama_model)
+
+
+# ==============================================================================
+# SEZIONE PANORAMICA (home: agent cards + KPI stile Metriks)
+# ==============================================================================
+if section == _SECTIONS[0]:
+    ui_style.agent_cards()
+    _h1, _h2, _h3, _h4 = st.columns(4)
+    _stats = db.stats()
+    _h1.metric("Opportunita' in DB", _stats["total"])
+    _h2.metric("Valutate AI", _stats["scored"])
+    _h3.metric("Chiamate Gemini oggi", db.llm_calls_today())
+    _h4.metric("Errori aperti", db.unresolved_error_count())
+
+
+# ==============================================================================
+# SEZIONE ADMIN - MOTORE AI (widget config; lo stato arriva da session_state)
+# ==============================================================================
+if section == _SECTIONS[6]:
     st.subheader("🧠 Motore AI (LLM)")
-    llm_options = ["🦙 Ollama (Locale)", "☁️ Google Gemini (Aziendale)"]
-    default_idx = 1 if config.LLM_PROVIDER == "gemini" else 0
-    selected_llm_label = st.radio(
+    st.radio(
         "Provider attivo:",
         llm_options,
-        index=default_idx,
         horizontal=True,
+        key="provider_radio",
         help="Scegli se usare il modello locale (Ollama) o l'AI cloud aziendale (Google Gemini)."
     )
 
-    selected_provider = "gemini" if "Gemini" in selected_llm_label else "ollama"
-
     if selected_provider == "gemini":
         _k1, _k2 = st.columns(2)
-        gemini_key_input = _k1.text_input(
+        _k1.text_input(
             "Gemini API Key Aziendale",
-            value=st.session_state.get("gemini_api_key", config.GEMINI_API_KEY),
             type="password",
+            key="gemini_api_key",
             help="Inserisci la chiave API aziendale di Google Gemini (AI Studio o Vertex AI)."
         )
-        st.session_state["gemini_api_key"] = gemini_key_input
-        gemini_extra_input = _k2.text_input(
+        _k2.text_input(
             "Chiavi extra rotazione (comma-separated)",
-            value=st.session_state.get("gemini_extra_keys", ""),
             type="password",
+            key="gemini_extra_keys",
             help="Chiavi API aggiuntive da progetti diversi: quando una esaurisce la quota giornaliera, la successiva prende il suo posto."
         )
-        st.session_state["gemini_extra_keys"] = gemini_extra_input
-
-        gemini_models = ["gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3.6-flash",
-                         "gemini-3.8-flash", "gemini-3.7-flash", "gemini-flash-latest",
-                         "gemini-pro-latest"]
-        current_model = config.GEMINI_MODEL if config.GEMINI_MODEL in gemini_models else "gemini-3.1-flash-lite"
-        selected_gemini_model = st.selectbox(
-            "Modello Gemini",
-            gemini_models,
-            index=gemini_models.index(current_model),
-        )
-
-        extra_keys = [k.strip() for k in re.split(r"[,\s]+", gemini_extra_input) if k.strip()]
-        ui_keys = ([gemini_key_input.strip()] if gemini_key_input.strip() else []) + extra_keys
-        set_gemini_keys(ui_keys)
+        st.selectbox("Modello Gemini", gemini_models, key="gemini_model_sel")
 
         n_keys = len(ui_keys) or gemini_keys_count()
         if ui_keys or gemini_keys_count():
@@ -137,25 +169,21 @@ with tab6:
         else:
             st.warning("⚠️ Inserisci almeno una chiave API di Gemini")
 
-        set_active_provider("gemini", api_key=gemini_key_input, gemini_model=selected_gemini_model)
-
         # Consumo quota odierna per chiave (rotazione)
         for u in gemini_key_usage():
             state = "🔴" if u["exhausted"] or u["calls"] >= config.GEMINI_DAILY_LIMIT else "🟢"
             st.caption(f"{state} Chiave `...{u['tail']}`: {u['calls']}/{config.GEMINI_DAILY_LIMIT} chiamate oggi")
     else:
         ollama_online = ollama_available()
-        selected_ollama_model = st.text_input(
+        st.text_input(
             "Modello Ollama",
-            value=config.OLLAMA_MODEL,
+            key="ollama_model_sel",
             help="Nome del modello in locale (es. llama3.1:8b, mistral:7b)."
         )
         if ollama_online:
             st.success(f"🟢 Ollama online ({selected_ollama_model})")
         else:
             st.warning("🔴 Ollama offline (fallback euristico attivo)")
-
-        set_active_provider("ollama", ollama_model=selected_ollama_model)
 
     st.divider()
 
@@ -187,7 +215,7 @@ def _company_brief(info: dict) -> str:
 # ==============================================================================
 # TAB 1: TENDER INTELLIGENCE & NEWS
 # ==============================================================================
-with tab1:
+if section == _SECTIONS[1]:
     def load_data() -> pd.DataFrame:
         with sqlite3.connect(DB_PATH) as conn:
             df = pd.read_sql_query(
@@ -378,7 +406,7 @@ with tab1:
 # ==============================================================================
 # TAB 2: RFP & CAPITOLATI ANALYZER
 # ==============================================================================
-with tab2:
+if section == _SECTIONS[2]:
     st.subheader("📄 Analisi Capitolato Tecnico / Gara d'Appalto (RFP)")
     st.write("Incolla il testo del capitolato o dei requisiti tecnici per estrarre le normative, i tipi di cavi e le domande chiave per il buyer.")
 
@@ -427,7 +455,7 @@ with tab2:
 # ==============================================================================
 # TAB 3: ACCOUNT RESEARCH & DOSSIER PRE-MEETING
 # ==============================================================================
-with tab3:
+if section == _SECTIONS[3]:
     st.subheader("🏢 Account Dossier & Preparazione al Meeting")
     st.write("Genera una sintesi strategica su un'azienda prospect, con sfide del settore, buying signals e interlocutori raccomandati.")
 
@@ -481,7 +509,7 @@ with tab3:
 # ==============================================================================
 # TAB 4: CRM & PIPELINE HEALTH CHECK
 # ==============================================================================
-with tab4:
+if section == _SECTIONS[4]:
     st.subheader("📊 Analisi Periodicità Ordini (MTBO), Retention & Cross-Selling")
     st.caption("Connessione diretta a SQL Server ERP (`GP_NX_AGG`) per monitorare frequenza di riordino, churn e cross-sell.")
 
@@ -734,7 +762,7 @@ with tab4:
 # ==============================================================================
 # TAB 5: NEW BUSINESS, LOOKALIKE PROSPECTING & OUTREACH MULTILINGUA
 # ==============================================================================
-with tab5:
+if section == _SECTIONS[5]:
     st.subheader("🚀 New Business, Clienti Gemelli Europa & Outreach AI")
     st.caption("Espansione del portafoglio: identifica aziende gemelle dei tuoi clienti top all'estero e genera comunicazioni su misura in 4 lingue.")
 
@@ -879,7 +907,7 @@ def _mask_secret(v: str | None) -> str:
 # ==============================================================================
 # TAB 6: AMMINISTRAZIONE, MONITOR & LOG
 # ==============================================================================
-with tab6:
+if section == _SECTIONS[6]:
     # ------------------------------------------------------------------
     # CONFIGURAZIONE ATTIVA & QUOTA GEMINI
     # ------------------------------------------------------------------
@@ -1138,17 +1166,17 @@ st.sidebar.divider()
 _n_err = db.unresolved_error_count()
 if _n_err:
     st.sidebar.warning(f"⚠️ {_n_err} errori di raccolta non risolti — "
-                       "vedi tab '🔧 Admin & Logs'")
+                       "vedi sezione '🔧 Admin & Logs'")
 st.sidebar.subheader("⚙️ Aggiornamento Dati")
 
 _pst = _pipeline_status()
 if _pst["state"] == "running":
-    st.sidebar.info("🔄 Pipeline in esecuzione — vedi tab '🔧 Admin & Logs'")
+    st.sidebar.info("🔄 Pipeline in esecuzione — vedi sezione '🔧 Admin & Logs'")
     st.sidebar.button("🚀 Aggiorna Fonti & Pipeline", disabled=True)
 else:
     if st.sidebar.button("🚀 Aggiorna Fonti & Pipeline"):
         _start_pipeline()
-        st.toast("Pipeline avviata in background — monitor in tab '🔧 Admin & Logs'", icon="🚀")
+        st.toast("Pipeline avviata in background — monitor in sezione '🔧 Admin & Logs'", icon="🚀")
         st.rerun()
     if _pst["state"] == "done":
         st.sidebar.success("✅ Ultima pipeline completata con successo")

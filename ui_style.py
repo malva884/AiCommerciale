@@ -46,6 +46,14 @@ div[data-testid="stMetric"] { background: #fff; border: 1px solid #e6e8f0;
 .stButton > button[kind="primary"] {
     background: linear-gradient(90deg, #4f46e5, #7c3aed); border: none; }
 section[data-testid="stSidebar"] { background: #f8fafc; }
+section[data-testid="stSidebar"] div[role="radiogroup"] label {
+    padding: .45rem .8rem; border-radius: 10px; width: 100%;
+    transition: background .12s ease; }
+section[data-testid="stSidebar"] div[role="radiogroup"] label:hover { background: #e8eaf3; }
+section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {
+    background: #4f46e5; }
+section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) p {
+    color: #fff !important; }
 </style>
 """
 
