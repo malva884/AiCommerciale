@@ -83,6 +83,12 @@ section = st.sidebar.radio("Sezioni", _SECTIONS, key="nav_section",
                            label_visibility="collapsed")
 
 
+def _goto(section_label: str):
+    """Cambia sezione via callback on_click: i bottoni non possono assegnare
+    st.session_state['nav_section'] dopo che il widget radio e' istanziato."""
+    st.session_state["nav_section"] = section_label
+
+
 # ==============================================================================
 # STATO MOTORE AI: eseguito a OGNI rerun (letto da session_state, non dai widget)
 # ==============================================================================
@@ -320,23 +326,18 @@ if section == _SECTIONS[0]:
 
         if _top_opp:
             _lbl = f"🎯 Top: {_top_opp[0][:38]}… (score {_top_opp[1]})"
-            if st.button(_lbl, width="stretch"):
-                st.session_state["nav_section"] = _SECTIONS[1]
-                st.rerun()
+            st.button(_lbl, width="stretch",
+                      on_click=_goto, args=(_SECTIONS[1],))
 
         if _n_err_agent > 0 and not _pipe_running:
-            if st.button(f"⚠️ {_n_err_agent} errori fonti da verificare",
-                         width="stretch"):
-                st.session_state["nav_section"] = _SECTIONS[6]
-                st.rerun()
+            st.button(f"⚠️ {_n_err_agent} errori fonti da verificare",
+                      width="stretch",
+                      on_click=_goto, args=(_SECTIONS[6],))
 
-        if st.button("📄 Analizza Capitolato RFP", width="stretch"):
-            st.session_state["nav_section"] = _SECTIONS[2]
-            st.rerun()
-
-        if st.button("✉️ Genera Outreach AI", width="stretch"):
-            st.session_state["nav_section"] = _SECTIONS[5]
-            st.rerun()
+        st.button("📄 Analizza Capitolato RFP", width="stretch",
+                  on_click=_goto, args=(_SECTIONS[2],))
+        st.button("✉️ Genera Outreach AI", width="stretch",
+                  on_click=_goto, args=(_SECTIONS[5],))
 
 
 # ==============================================================================
