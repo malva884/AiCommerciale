@@ -65,11 +65,6 @@ def load_cached_erp_periodicity() -> pd.DataFrame:
 
 ui_style.inject_styles()
 
-# ==============================================================================
-# SIDEBAR: RIMANDO CONFIG MOTORE AI (TAB ADMIN)
-# ==============================================================================
-st.sidebar.caption("🧠 Motore AI: configurazione nel sezione '🔧 Admin & Logs'")
-st.sidebar.divider()
 
 _SECTIONS = [
     "🏠  Panoramica",
@@ -176,13 +171,13 @@ if section == _SECTIONS[0]:
     col_main, col_agent = st.columns([2.6, 1.1], gap="medium")
 
     with col_main:
-        st.markdown("""
-        <div class="mk-panel">
-          <div class="mk-panel-header">
-            <h3 class="mk-panel-title">Anagrafica e opportunità recenti</h3>
-            <span style="font-size:0.8rem; color:#818ba4;">Aggiornato in tempo reale</span>
-          </div>
-        """, unsafe_allow_html=True)
+        st.markdown(
+            '<div class="mk-panel-header">' 
+            '<h3 class="mk-panel-title">Anagrafica e opportunità recenti</h3>' 
+            '<span style="font-size:0.8rem; color:#818ba4;">Aggiornato in tempo reale</span>' 
+            '</div>',
+            unsafe_allow_html=True
+        )
 
         with sqlite3.connect(DB_PATH) as conn:
             df_recent = pd.read_sql_query(
@@ -208,31 +203,30 @@ if section == _SECTIONS[0]:
         else:
             st.info("Nessuna opportunità ancora presente nel database. Clicca su 'Aggiorna Fonti & Pipeline' nella sidebar per iniziare.")
 
-        st.markdown("""
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-top:14px; padding-top:12px; border-top:1px solid #1c243c; font-size:0.82rem; color:#818ba4;">
-            <div>1-5 di """ + str(_stats["total"]) + """ opportunità</div>
-            <div style="display:flex; gap:6px;">
-              <span style="background:#1c1538; border:1px solid #7c5cff; color:#fff; padding:2px 8px; border-radius:6px; font-weight:700;">1</span>
-              <span style="padding:2px 8px; border-radius:6px;">2</span>
-              <span style="padding:2px 8px; border-radius:6px;">3</span>
-            </div>
-            <div>5 per pagina</div>
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(
+            '<div style="display:flex; justify-content:space-between; align-items:center; margin-top:12px; padding:10px 14px; background:#0f1526; border:1px solid #1a2238; border-radius:12px; font-size:0.82rem; color:#818ba4;">' 
+            f'<div>1-5 di {_stats["total"]} opportunità</div>' 
+            '<div style="display:flex; gap:6px;">' 
+            '<span style="background:#1c1538; border:1px solid #7c5cff; color:#fff; padding:2px 8px; border-radius:6px; font-weight:700;">1</span>' 
+            '<span style="padding:2px 8px; border-radius:6px;">2</span>' 
+            '<span style="padding:2px 8px; border-radius:6px;">3</span>' 
+            '</div>' 
+            '<div>5 per pagina</div>' 
+            '</div>',
+            unsafe_allow_html=True
+        )
 
     with col_agent:
-        st.markdown("""
-        <div class="mk-agent-sidecard">
-          <div class="mk-agent-sidecard-title">
-            <span style="font-size:1.2rem;">✨</span> Sales Agent
-          </div>
-          <div class="mk-agent-alert-box">
-            <b>Avviso priorità:</b> Rilevate nuove gare con requisiti tecnici ad alta compatibilità per cavi speciali CPR B2ca e EN 50288.
-          </div>
-          <div style="font-size:0.82rem; color:#818ba4; margin-bottom:10px; font-weight:600;">Azioni suggerite:</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(
+            '<div class="mk-agent-sidecard">' 
+            '<div class="mk-agent-sidecard-title"><span style="font-size:1.2rem;">✨</span> Sales Agent</div>' 
+            '<div class="mk-agent-alert-box">' 
+            '<b>Avviso priorità:</b> Rilevate nuove gare con requisiti tecnici ad alta compatibilità per cavi speciali CPR B2ca e EN 50288.' 
+            '</div>' 
+            '<div style="font-size:0.82rem; color:#818ba4; margin-bottom:10px; font-weight:600;">Azioni suggerite:</div>' 
+            '</div>',
+            unsafe_allow_html=True
+        )
 
         if st.button("🚀 Avvia Pipeline Dati", use_container_width=True, type="primary"):
             st.session_state["nav_section"] = _SECTIONS[1]

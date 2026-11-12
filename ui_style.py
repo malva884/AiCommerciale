@@ -1,4 +1,4 @@
-"""Stile UI 'Metriks Suite' pixel-perfect: tema dark navy, sidebar, KPI sparkline, agent panel."""
+"""Stile UI 'Metriks Suite' pixel-perfect: dark navy, sidebar, KPI cards con sparkline, zero bug markdown."""
 import streamlit as st
 
 CSS = """
@@ -32,9 +32,16 @@ html, body, [class*="css"], .stApp {
     color: var(--mk-text) !important;
 }
 
+header[data-testid="stHeader"] {
+    background: transparent !important;
+    z-index: 1 !important;
+}
+
 .block-container {
-    padding-top: 1.5rem !important;
+    padding-top: 4.2rem !important;
     padding-bottom: 3rem !important;
+    padding-left: 2rem !important;
+    padding-right: 2rem !important;
     max-width: 1440px !important;
 }
 
@@ -58,9 +65,9 @@ section[data-testid="stSidebar"] > div:first-child {
     display: flex;
     align-items: center;
     gap: 11px;
-    padding: 6px 10px 22px 8px;
+    padding: 6px 10px 18px 8px;
     margin-bottom: 8px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .mk-cube-svg {
@@ -80,7 +87,7 @@ section[data-testid="stSidebar"] > div:first-child {
 }
 
 .mk-brand-badge {
-    font-size: 0.65rem;
+    font-size: 0.62rem;
     font-weight: 600;
     background: rgba(124, 92, 255, 0.2);
     border: 1px solid rgba(124, 92, 255, 0.4);
@@ -90,9 +97,18 @@ section[data-testid="stSidebar"] > div:first-child {
     text-transform: uppercase;
 }
 
-/* Nascondi il pallino nativo del radio button di Streamlit */
-section[data-testid="stSidebar"] div[role="radiogroup"] label > div:first-child {
+/* NASCONDI COMPLETAMENTE IL PALLINO NATIVO DEL RADIO BUTTON */
+[data-testid="stSidebar"] div[role="radiogroup"] label > div:first-child,
+[data-testid="stSidebar"] div[role="radiogroup"] label div[data-baseweb="radio"] > div:first-child,
+[data-testid="stSidebar"] div[role="radiogroup"] input[type="radio"],
+[data-testid="stSidebar"] div[role="radiogroup"] svg,
+[data-testid="stSidebar"] div[role="radiogroup"] label > div:not(:last-child) {
     display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+    opacity: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
 }
 
 /* Menu items sidebar identici a Metriks */
@@ -111,7 +127,8 @@ section[data-testid="stSidebar"] div[role="radiogroup"] label {
     cursor: pointer !important;
     background: transparent !important;
     border: 1px solid transparent !important;
-    margin: 0 !important;
+    margin: 0 0 3px 0 !important;
+    width: 100% !important;
     transition: all 0.16s ease !important;
 }
 
@@ -120,7 +137,7 @@ section[data-testid="stSidebar"] div[role="radiogroup"] label:hover {
     color: #e2e8f0 !important;
 }
 
-/* Voce attiva con rettangolo viola e glow (esattamente come 'Documenti' nella foto) */
+/* Voce attiva con pill viola scuro e bordo viola acceso con glow (esattamente come 'Documenti' nello screenshot) */
 section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {
     background: var(--mk-purple-active) !important;
     border: 1px solid var(--mk-purple) !important;
@@ -146,7 +163,7 @@ section[data-testid="stSidebar"] div[role="radiogroup"] label p {
     border-radius: 12px;
     background: #101627;
     border: 1px solid var(--mk-border);
-    margin-top: 24px;
+    margin-top: 18px;
     color: var(--mk-text-dim);
     font-size: 0.88rem;
     font-weight: 500;
@@ -163,21 +180,21 @@ section[data-testid="stSidebar"] div[role="radiogroup"] label p {
 }
 
 /* ==========================================================================
-   HEADER PRINCIPALE: TITOLO BOLD + SOTTOTITOLO + DATA PILL IN ALTO A DESTRA
+   HEADER PRINCIPALE
    ========================================================================== */
 .mk-top-header {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    margin-bottom: 22px;
+    margin-bottom: 24px;
 }
 
 .mk-top-title {
-    font-size: 2.1rem;
+    font-size: 2.15rem;
     font-weight: 800;
     color: #ffffff;
     letter-spacing: -0.03em;
-    margin: 0 0 4px 0;
+    margin: 0 0 5px 0;
     line-height: 1.15;
 }
 
@@ -202,13 +219,14 @@ section[data-testid="stSidebar"] div[role="radiogroup"] label p {
 }
 
 /* ==========================================================================
-   KPI TILES IDENTICHE ALLA FOTO (CON ICONE, DELTA VERDE/ARANCIO E SPARKLINE SVG)
+   KPI TILES: 3 COLONNE ORIZZONTALI CON SPARKLINE
    ========================================================================== */
 .mk-kpi-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 16px;
     margin-bottom: 24px;
+    width: 100%;
 }
 
 .mk-kpi-card {
@@ -219,7 +237,6 @@ section[data-testid="stSidebar"] div[role="radiogroup"] label p {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    position: relative;
     transition: transform 0.15s ease, border-color 0.15s ease;
 }
 
@@ -315,7 +332,7 @@ section[data-testid="stSidebar"] div[role="radiogroup"] label p {
 }
 
 /* ==========================================================================
-   PANNELLO / CARD PRINCIPALE IN STILE METRIKS
+   PANNELLO / CARD
    ========================================================================== */
 .mk-panel {
     background: var(--mk-card);
@@ -337,34 +354,6 @@ section[data-testid="stSidebar"] div[role="radiogroup"] label p {
     font-weight: 700;
     color: #ffffff;
     margin: 0;
-}
-
-/* Status badges identici allo screenshot */
-.mk-badge-status {
-    display: inline-block;
-    padding: 4px 10px;
-    border-radius: 999px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    text-align: center;
-}
-
-.mk-badge-completo {
-    background: rgba(16, 185, 129, 0.15);
-    border: 1px solid rgba(16, 185, 129, 0.4);
-    color: #34d399;
-}
-
-.mk-badge-aggiornare {
-    background: rgba(245, 158, 11, 0.15);
-    border: 1px solid rgba(245, 158, 11, 0.4);
-    color: #fbbf24;
-}
-
-.mk-badge-verifica {
-    background: rgba(59, 130, 246, 0.15);
-    border: 1px solid rgba(59, 130, 246, 0.4);
-    color: #93c5fd;
 }
 
 /* ==========================================================================
@@ -479,98 +468,96 @@ def inject_styles():
 
 def brand():
     """Logo e brand Metriks Suite identici alla foto con cubo wireframe 3D isometrico."""
-    st.sidebar.markdown("""
-    <div class="mk-brand-container">
-      <svg class="mk-cube-svg" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M16 2L28 8.5V22.5L16 29L4 22.5V8.5L16 2Z" stroke="#ffffff" stroke-width="1.8" stroke-linejoin="round"/>
-        <path d="M16 2V15.5" stroke="#ffffff" stroke-width="1.8" stroke-linejoin="round"/>
-        <path d="M16 15.5L28 8.5" stroke="#ffffff" stroke-width="1.8" stroke-linejoin="round"/>
-        <path d="M16 15.5L4 8.5" stroke="#ffffff" stroke-width="1.8" stroke-linejoin="round"/>
-        <path d="M16 29V15.5" stroke="#ffffff" stroke-width="1.8" stroke-linejoin="round"/>
-        <circle cx="21" cy="6" r="1.5" fill="#a78bfa"/>
-        <path d="M21 4V8M19 6H23" stroke="#a78bfa" stroke-width="1.3"/>
-      </svg>
-      <div>
-        <div class="mk-brand-title">Metriks<span style="font-weight:300; opacity:0.9;">Suite</span></div>
-        <span class="mk-brand-badge">Commerciale B2B</span>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.sidebar.markdown(
+        '<div class="mk-brand-container">'
+        '<svg class="mk-cube-svg" viewBox="0 0 32 32" fill="none">'
+        '<path d="M16 2L28 8.5V22.5L16 29L4 22.5V8.5L16 2Z" stroke="#ffffff" stroke-width="1.8" stroke-linejoin="round"/>'
+        '<path d="M16 2V15.5" stroke="#ffffff" stroke-width="1.8" stroke-linejoin="round"/>'
+        '<path d="M16 15.5L28 8.5" stroke="#ffffff" stroke-width="1.8" stroke-linejoin="round"/>'
+        '<path d="M16 15.5L4 8.5" stroke="#ffffff" stroke-width="1.8" stroke-linejoin="round"/>'
+        '<path d="M16 29V15.5" stroke="#ffffff" stroke-width="1.8" stroke-linejoin="round"/>'
+        '<circle cx="21" cy="6" r="1.5" fill="#a78bfa"/>'
+        '<path d="M21 4V8M19 6H23" stroke="#a78bfa" stroke-width="1.3"/>'
+        '</svg>'
+        '<div>'
+        '<div class="mk-brand-title">Metriks<span style="font-weight:300; opacity:0.9;">Suite</span></div>'
+        '<span class="mk-brand-badge">Commerciale B2B</span>'
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True
+    )
 
 
 def sidebar_footer(unresolved_count: int = 0):
     """Pill notifiche/errori fissato sul fondo della sidebar (identico alla foto)."""
     badge_label = str(unresolved_count) if unresolved_count > 0 else "0"
-    st.sidebar.markdown(f"""
-    <div class="mk-notif-bar">
-      <span>🔔 Notifiche & Stato</span>
-      <span class="mk-notif-pill">{badge_label}</span>
-    </div>
-    """, unsafe_allow_html=True)
+    st.sidebar.markdown(
+        '<div class="mk-notif-bar">'
+        '<span>🔔 Notifiche & Stato</span>'
+        f'<span class="mk-notif-pill">{badge_label}</span>'
+        '</div>',
+        unsafe_allow_html=True
+    )
 
 
 def page_header(title: str, subtitle: str, date_tag: str = "Novembre 2026"):
     """Header compatto della pagina con titolo bold, sottotitolo e pill della data in alto a destra."""
-    st.markdown(f"""
-    <div class="mk-top-header">
-      <div>
-        <div class="mk-top-title">{title}</div>
-        <div class="mk-top-sub">{subtitle}</div>
-      </div>
-      <div class="mk-date-pill">
-        📅 {date_tag}
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        '<div class="mk-top-header">'
+        '<div>'
+        f'<div class="mk-top-title">{title}</div>'
+        f'<div class="mk-top-sub">{subtitle}</div>'
+        '</div>'
+        f'<div class="mk-date-pill">📅 {date_tag}</div>'
+        '</div>',
+        unsafe_allow_html=True
+    )
 
 
 def kpi_cards_row(kpis: list[dict]):
     """Griglia di 3 KPI cards identiche alla foto con icona colorata, delta verde/arancio e sparkline SVG.
-    Ogni dict: {icon, label, value, delta, sub, variant: 'purple'|'blue'|'amber'}"""
-    cards_html = []
-    
-    sparkline_purple = """
-    <svg class="mk-sparkline-svg" viewBox="0 0 100 40" fill="none">
-      <path d="M4 32 C 22 28, 30 18, 48 24 C 66 30, 76 8, 96 12" stroke="#8b5cf6" stroke-width="2.6" stroke-linecap="round"/>
-      <circle cx="96" cy="12" r="2.8" fill="#8b5cf6"/>
-    </svg>
-    """
-    sparkline_blue = """
-    <svg class="mk-sparkline-svg" viewBox="0 0 100 40" fill="none">
-      <path d="M4 28 C 24 34, 38 12, 58 20 C 74 26, 82 6, 96 10" stroke="#3b82f6" stroke-width="2.6" stroke-linecap="round"/>
-      <circle cx="96" cy="10" r="2.8" fill="#3b82f6"/>
-    </svg>
-    """
-    sparkline_amber = """
-    <svg class="mk-sparkline-svg" viewBox="0 0 100 40" fill="none">
-      <path d="M4 24 C 20 20, 40 32, 60 16 C 78 4, 86 14, 96 8" stroke="#f59e0b" stroke-width="2.6" stroke-linecap="round"/>
-      <circle cx="96" cy="8" r="2.8" fill="#f59e0b"/>
-    </svg>
-    """
+    TUTTO IL MARKDOWN È RIGOROSAMENTE FORMATTATO SENZA INDENTAZIONE PER EVITARE BUG PRE/CODE."""
+    spk_purple = (
+        '<svg class="mk-sparkline-svg" viewBox="0 0 100 40" fill="none">'
+        '<path d="M4 32 C 22 28, 30 18, 48 24 C 66 30, 76 8, 96 12" stroke="#8b5cf6" stroke-width="2.6" stroke-linecap="round"/>'
+        '<circle cx="96" cy="12" r="2.8" fill="#8b5cf6"/>'
+        '</svg>'
+    )
+    spk_blue = (
+        '<svg class="mk-sparkline-svg" viewBox="0 0 100 40" fill="none">'
+        '<path d="M4 28 C 24 34, 38 12, 58 20 C 74 26, 82 6, 96 10" stroke="#3b82f6" stroke-width="2.6" stroke-linecap="round"/>'
+        '<circle cx="96" cy="10" r="2.8" fill="#3b82f6"/>'
+        '</svg>'
+    )
+    spk_amber = (
+        '<svg class="mk-sparkline-svg" viewBox="0 0 100 40" fill="none">'
+        '<path d="M4 24 C 20 20, 40 32, 60 16 C 78 4, 86 14, 96 8" stroke="#f59e0b" stroke-width="2.6" stroke-linecap="round"/>'
+        '<circle cx="96" cy="8" r="2.8" fill="#f59e0b"/>'
+        '</svg>'
+    )
 
+    cards = []
     for k in kpis:
         variant = k.get("variant", "purple")
         icon_cls = f"mk-kpi-icon-{variant}"
         delta_cls = "mk-delta-amber" if variant == "amber" else "mk-delta-green"
-        spk = sparkline_amber if variant == "amber" else (sparkline_blue if variant == "blue" else sparkline_purple)
-        
-        cards_html.append(f"""
-        <div class="mk-kpi-card">
-          <div class="mk-kpi-left">
-            <div class="mk-kpi-icon-box {icon_cls}">
-              <span style="font-size:1.35rem;">{k['icon']}</span>
-            </div>
-            <div>
-              <div class="mk-kpi-label">{k['label']}</div>
-              <div class="mk-kpi-val-row">
-                <div class="mk-kpi-val">{k['value']}</div>
-                <div class="mk-kpi-delta {delta_cls}">{k['delta']}</div>
-              </div>
-              <div class="mk-kpi-sub">{k['sub']}</div>
-            </div>
-          </div>
-          <div>{spk}</div>
-        </div>
-        """)
+        spk = spk_amber if variant == "amber" else (spk_blue if variant == "blue" else spk_purple)
+        cards.append(
+            '<div class="mk-kpi-card">'
+            '<div class="mk-kpi-left">'
+            f'<div class="mk-kpi-icon-box {icon_cls}"><span style="font-size:1.35rem;">{k["icon"]}</span></div>'
+            '<div>'
+            f'<div class="mk-kpi-label">{k["label"]}</div>'
+            '<div class="mk-kpi-val-row">'
+            f'<div class="mk-kpi-val">{k["value"]}</div>'
+            f'<div class="mk-kpi-delta {delta_cls}">{k["delta"]}</div>'
+            '</div>'
+            f'<div class="mk-kpi-sub">{k["sub"]}</div>'
+            '</div>'
+            '</div>'
+            f'<div>{spk}</div>'
+            '</div>'
+        )
 
-    st.markdown(f'<div class="mk-kpi-grid">{"".join(cards_html)}</div>', unsafe_allow_html=True)
+    grid_html = f'<div class="mk-kpi-grid">{"".join(cards)}</div>'
+    st.markdown(grid_html, unsafe_allow_html=True)
