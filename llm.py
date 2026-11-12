@@ -16,11 +16,11 @@ import time
 import requests
 
 import db
-from config import (AZIENDA, COUNTRY_TO_AREA, GEMINI_API_KEY,
-                    GEMINI_API_KEYS, GEMINI_API_URL, GEMINI_DAILY_LIMIT,
-                    GEMINI_MIN_INTERVAL, GEMINI_MODEL, GEMINI_TIMEOUT,
-                    KEYWORD_SCORE, LLM_PROVIDER, OLLAMA_MODEL,
-                    OLLAMA_TIMEOUT, OLLAMA_URL)
+from config import (AZIENDA, COUNTRY_TO_AREA, DISABLE_OLLAMA_FALLBACK,
+                    GEMINI_API_KEY, GEMINI_API_KEYS, GEMINI_API_URL,
+                    GEMINI_DAILY_LIMIT, GEMINI_MIN_INTERVAL, GEMINI_MODEL,
+                    GEMINI_TIMEOUT, KEYWORD_SCORE, LLM_PROVIDER,
+                    OLLAMA_MODEL, OLLAMA_TIMEOUT, OLLAMA_URL)
 
 # Runtime overrides (impostabili dinamicamente da UI Streamlit o da script)
 _RUNTIME_PROVIDER = None
@@ -30,6 +30,7 @@ _RUNTIME_OLLAMA_MODEL = None
 _RUNTIME_GEMINI_KEYS = []         # rotazione impostata da UI (set_gemini_keys)
 _GEMINI_KEYS_EXHAUSTED = set()   # key_id esauriti oggi (429 o budget)
 _LAST_GEMINI_CALL = 0.0           # timestamp ultima chiamata (pacing RPM)
+_RUNTIME_OLLAMA_FALLBACK = None   # override UI: False = niente fallback su Ollama
 
 
 def set_active_provider(provider: str, api_key: str | None = None,
@@ -51,6 +52,20 @@ def set_gemini_keys(keys):
     Lista vuota -> si torna alle chiavi da variabili d'ambiente."""
     global _RUNTIME_GEMINI_KEYS
     _RUNTIME_GEMINI_KEYS = [k.strip() for k in keys if k and k.strip()]
+
+
+def set_ollama_fallback(enabled: bool):
+    """Abilita/disabilita a runtime il fallback automatico su Ollama
+    (usato quando il provider attivo e' Gemini e la chiamata fallisce)."""
+    global _RUNTIME_OLLAMA_FALLBACK
+    _RUNTIME_OLLAMA_FALLBACK = bool(enabled)
+
+
+def ollama_fallback_enabled() -> bool:
+    """True se Ollama puo' essere usato come fallback di Gemini."""
+    if _RUNTIME_OLLAMA_FALLBACK is not None:
+        return _RUNTIME_OLLAMA_FALLBACK
+    return not DISABLE_OLLAMA_FALLBACK
 
 
 def get_active_provider() -> str:
@@ -314,8 +329,11 @@ def generate_json_completion(
         data = _call_gemini_json(system_prompt, user_prompt, api_key=api_key, model=model, timeout=timeout)
         if data is not None:
             return data, "gemini"
-        # Fallback automatico a Ollama se disponibile
-        if ollama_available():
+        # Fallback automatico a Ollama se disponibile e non disabilitato
+        if not ollama_fallback_enabled():
+            print("[llm] Gemini non riuscito; fallback Ollama disabilitato",
+                  flush=True)
+        elif ollama_available():
             print("[llm] Gemini non riuscito -> fallback su Ollama", flush=True)
             data = _call_ollama_json(system_prompt, user_prompt, model=model, timeout=timeout)
             if data is not None:

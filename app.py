@@ -33,6 +33,7 @@ from llm import (
     ollama_available,
     set_active_provider,
     set_gemini_keys,
+    set_ollama_fallback,
 )
 from prospecting_engine import (
     LOOKALIKE_PROSPECTS_DB,
@@ -98,6 +99,9 @@ st.session_state.setdefault("gemini_model_sel",
                             config.GEMINI_MODEL if config.GEMINI_MODEL in gemini_models
                             else "gemini-3.1-flash-lite")
 st.session_state.setdefault("ollama_model_sel", config.OLLAMA_MODEL)
+st.session_state.setdefault("no_ollama_fallback",
+                            config.DISABLE_OLLAMA_FALLBACK)
+set_ollama_fallback(not st.session_state["no_ollama_fallback"])
 
 selected_llm_label = st.session_state["provider_radio"]
 selected_provider = "gemini" if "Gemini" in selected_llm_label else "ollama"
@@ -1074,6 +1078,10 @@ if section == _SECTIONS[6]:
         ("GEMINI_DAILY_LIMIT", config.GEMINI_DAILY_LIMIT, "env"),
         ("GEMINI_MIN_INTERVAL", f"{config.GEMINI_MIN_INTERVAL}s", "env"),
         ("OLLAMA_MODEL", config.OLLAMA_MODEL, "env / sidebar"),
+        ("DISABLE_OLLAMA_FALLBACK",
+         str(st.session_state.get("no_ollama_fallback",
+                                  config.DISABLE_OLLAMA_FALLBACK)),
+         "sidebar / env"),
         ("OLLAMA_URL", config.OLLAMA_URL, "env"),
         ("TED_API_KEY", _mask_secret(os.environ.get("TED_API_KEY", "")), "env"),
         ("SQLSERVER_HOST", config.SQLSERVER_HOST, "env"),
@@ -1287,6 +1295,8 @@ def _start_pipeline():
     os.makedirs(os.path.dirname(_PIPELINE_LOG_PATH), exist_ok=True)
     env = os.environ.copy()
     env["LLM_PROVIDER"] = selected_provider
+    env["DISABLE_OLLAMA_FALLBACK"] = (
+        "1" if st.session_state.get("no_ollama_fallback") else "0")
     env["PYTHONUNBUFFERED"] = "1"
     if selected_provider == "gemini":
         if st.session_state.get("gemini_api_key"):

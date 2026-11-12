@@ -11,6 +11,9 @@ LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama").lower()  # "ollama" | "g
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/chat")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1:8b")  # alternativa piu' leggera: "mistral:7b"
 OLLAMA_TIMEOUT = 120              # secondi per risposta
+# Se "1", Ollama NON viene usato come fallback quando Gemini non funziona
+DISABLE_OLLAMA_FALLBACK = os.environ.get(
+    "DISABLE_OLLAMA_FALLBACK", "0").strip().lower() in ("1", "true", "yes")
 
 # --- LLM cloud aziendale (Google Gemini) ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
