@@ -10,11 +10,14 @@ Estrae:
 """
 import json
 import re
+import time
 
 import requests
 
+import db
 from config import (AZIENDA, COUNTRY_TO_AREA, GEMINI_API_KEY,
-                    GEMINI_API_URL, GEMINI_MODEL, GEMINI_TIMEOUT,
+                    GEMINI_API_URL, GEMINI_DAILY_LIMIT,
+                    GEMINI_MIN_INTERVAL, GEMINI_MODEL, GEMINI_TIMEOUT,
                     KEYWORD_SCORE, LLM_PROVIDER, OLLAMA_MODEL,
                     OLLAMA_TIMEOUT, OLLAMA_URL)
 
@@ -23,6 +26,8 @@ _RUNTIME_PROVIDER = None
 _RUNTIME_GEMINI_KEY = None
 _RUNTIME_GEMINI_MODEL = None
 _RUNTIME_OLLAMA_MODEL = None
+_GEMINI_QUOTA_EXHAUSTED = False   # 429 ricevuto o budget giornaliero esaurito
+_LAST_GEMINI_CALL = 0.0           # timestamp ultima chiamata (pacing RPM)
 
 
 def set_active_provider(provider: str, api_key: str | None = None,
@@ -145,13 +150,21 @@ def is_llm_available(provider: str | None = None, api_key: str | None = None) ->
     return ollama_available()
 
 
+def gemini_quota_exhausted() -> bool:
+    """True se il budget giornaliero Gemini e' esaurito (429 o contatore)."""
+    return _GEMINI_QUOTA_EXHAUSTED or db.llm_calls_today() >= GEMINI_DAILY_LIMIT
+
+
 def _call_gemini_json(system_prompt: str, user_prompt: str,
                       api_key: str | None = None,
                       model: str | None = None,
                       timeout: int | None = None) -> dict | None:
     """Chiamata REST a Google Gemini (Interactions API) con output JSON."""
+    global _GEMINI_QUOTA_EXHAUSTED, _LAST_GEMINI_CALL
     key = api_key or _RUNTIME_GEMINI_KEY or GEMINI_API_KEY
     if not key:
+        return None
+    if gemini_quota_exhausted():
         return None
 
     mdl = model or _RUNTIME_GEMINI_MODEL or GEMINI_MODEL
@@ -164,6 +177,13 @@ def _call_gemini_json(system_prompt: str, user_prompt: str,
         },
     }
 
+    # Pacing RPM: distanzia le chiamate per restare sotto il limite al minuto
+    wait = GEMINI_MIN_INTERVAL - (time.time() - _LAST_GEMINI_CALL)
+    if wait > 0:
+        time.sleep(wait)
+    _LAST_GEMINI_CALL = time.time()
+    db.llm_register_call()  # ogni tentativo consuma quota giornaliera
+
     try:
         resp = requests.post(
             url,
@@ -172,6 +192,10 @@ def _call_gemini_json(system_prompt: str, user_prompt: str,
             json=payload,
             timeout=timeout or GEMINI_TIMEOUT,
         )
+        if resp.status_code == 429:
+            _GEMINI_QUOTA_EXHAUSTED = True
+            print(f"[llm] Gemini 429 quota/rate limit esaurito", flush=True)
+            return None
         if resp.status_code != 200:
             print(f"[llm] Gemini HTTP {resp.status_code}: {resp.text[:300]}", flush=True)
             return None
@@ -379,6 +403,11 @@ def _score_heuristic(title: str, text: str, country_hint: str | None = None) -> 
         "email_draft": None,
         "scored_by": "heuristic",
     }
+
+
+def heuristic_prescore(title: str, text: str, country_hint: str | None = None) -> int:
+    """Score euristico rapido (nessuna chiamata LLM) per ordinare la coda."""
+    return _score_heuristic(title, text, country_hint).get("score", 0)
 
 
 def score_opportunity(title: str, text: str, country_hint: str | None = None,

@@ -47,6 +47,12 @@ CREATE TABLE IF NOT EXISTS fetch_errors (
     resolved    INTEGER NOT NULL DEFAULT 0, -- 1 = sistemato/riconosciuto
     resolved_at TEXT
 );
+
+-- Contatore giornaliero chiamate LLM cloud (quota Gemini RPD)
+CREATE TABLE IF NOT EXISTS llm_usage (
+    day    TEXT PRIMARY KEY,           -- YYYY-MM-DD
+    calls  INTEGER NOT NULL DEFAULT 0
+);
 """
 
 
@@ -164,6 +170,24 @@ def stats() -> dict:
             "SELECT COUNT(*) FROM opportunities WHERE score IS NOT NULL"
         ).fetchone()[0]
     return {"total": total, "scored": scored}
+
+
+def llm_calls_today() -> int:
+    """Chiamate LLM cloud registrate oggi (quota giornaliera)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT calls FROM llm_usage WHERE day=?",
+            (datetime.now().strftime("%Y-%m-%d"),)).fetchone()
+    return row[0] if row else 0
+
+
+def llm_register_call():
+    """Incrementa il contatore giornaliero delle chiamate LLM cloud."""
+    with _connect() as conn:
+        conn.execute(
+            """INSERT INTO llm_usage (day, calls) VALUES (?, 1)
+               ON CONFLICT(day) DO UPDATE SET calls = calls + 1""",
+            (datetime.now().strftime("%Y-%m-%d"),))
 
 
 def get_company_info(company_name: str) -> dict | None:

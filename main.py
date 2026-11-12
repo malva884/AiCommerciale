@@ -4,8 +4,10 @@ import traceback
 from datetime import datetime
 
 import db
+from config import GEMINI_DAILY_LIMIT
 from fetchers import fetch_news, fetch_ted, fetch_ted_awards
-from llm import get_active_provider, score_opportunity
+from llm import (gemini_quota_exhausted, get_active_provider,
+                 heuristic_prescore, score_opportunity)
 
 
 def _log(msg: str):
@@ -43,9 +45,21 @@ def run(use_llm: bool = True, provider: str | None = None):
 
     if use_llm:
         to_score = db.unscored(limit=250, include_heuristic=False)
+        if active_provider == "gemini":
+            # La quota giornaliera va ai candidati piu' promettenti: ordina per
+            # score euristico decrescente (scoring rapido, zero chiamate API).
+            to_score.sort(
+                key=lambda r: heuristic_prescore(
+                    r["title"], r["text"] or "", r["country"]),
+                reverse=True)
+        budget = max(0, GEMINI_DAILY_LIMIT - db.llm_calls_today())
         _log(f"Scoring AI in corso: {len(to_score)} opportunita' da valutare "
-             f"(provider={active_provider.upper()})...")
+             f"(provider={active_provider.upper()}, budget Gemini residuo: {budget})")
         for i, row in enumerate(to_score, 1):
+            if active_provider == "gemini" and gemini_quota_exhausted():
+                _log(f"Quota Gemini esaurita ({GEMINI_DAILY_LIMIT}/giorno): "
+                     f"{len(to_score) - i + 1} opportunita' rinviate al prossimo run.")
+                break
             res = score_opportunity(
                 title=row["title"],
                 text=row["text"] or "",

@@ -21,6 +21,9 @@ GEMINI_API_URL = os.environ.get(
     "GEMINI_API_URL",
     "https://generativelanguage.googleapis.com/v1beta/interactions"
 )
+# Quota giornaliera Gemini (free tier ~500 RPD / ~15 RPM per modello)
+GEMINI_DAILY_LIMIT = int(os.environ.get("GEMINI_DAILY_LIMIT", "450"))      # margine di sicurezza
+GEMINI_MIN_INTERVAL = float(os.environ.get("GEMINI_MIN_INTERVAL", "4.5"))  # sec tra chiamate
 
 # --- Profilo aziendale e settori target ---
 AZIENDA = (
