@@ -144,7 +144,7 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "🏢 Account Research & Dossier",
     "📊 CRM & Retention Ordini",
     "🚀 New Business & Lookalike UE",
-    "🛠️ Log Errori",
+    "🔧 Admin & Logs",
 ])
 
 
@@ -859,14 +859,67 @@ with tab5:
                     st.markdown(outreach_res.get("cold_call_script", "").replace("\n", "\n\n"))
 
 
+def _mask_secret(v: str | None) -> str:
+    """Mostra solo gli ultimi 4 caratteri di un segreto (o trattino)."""
+    return f"\u2022\u2022\u2022\u2022{v[-4:]}" if v else "\u2014"
+
+
 # ==============================================================================
-# TAB 6: LOG ERRORI DI RACCOLTA
+# TAB 6: AMMINISTRAZIONE, MONITOR & LOG
 # ==============================================================================
 with tab6:
     # ------------------------------------------------------------------
+    # CONFIGURAZIONE ATTIVA & QUOTA GEMINI
+    # ------------------------------------------------------------------
+    st.subheader("\u2699\ufe0f Configurazione Attiva")
+    _a1, _a2, _a3 = st.columns(3)
+    _a1.metric("Provider LLM", get_active_provider().upper())
+    _a2.metric("Opportunit\u00e0 in DB", db.stats()["total"])
+    _a3.metric("Chiamate Gemini oggi", db.llm_calls_today())
+
+    st.dataframe(pd.DataFrame([
+        ("LLM_PROVIDER", get_active_provider(), "sidebar / env"),
+        ("GEMINI_MODEL", config.GEMINI_MODEL, "env (override sidebar)"),
+        ("GEMINI_API_KEY", _mask_secret(config.GEMINI_API_KEY), "env / sidebar"),
+        ("GEMINI_API_KEYS", f"{len(config.GEMINI_API_KEYS)} chiavi extra", "env"),
+        ("GEMINI_DAILY_LIMIT", config.GEMINI_DAILY_LIMIT, "env"),
+        ("GEMINI_MIN_INTERVAL", f"{config.GEMINI_MIN_INTERVAL}s", "env"),
+        ("OLLAMA_MODEL", config.OLLAMA_MODEL, "env / sidebar"),
+        ("OLLAMA_URL", config.OLLAMA_URL, "env"),
+        ("TED_API_KEY", _mask_secret(os.environ.get("TED_API_KEY", "")), "env"),
+        ("SQLSERVER_HOST", config.SQLSERVER_HOST, "env"),
+        ("SQLSERVER_DB", config.SQLSERVER_DB, "env"),
+        ("SQLSERVER_USER", config.SQLSERVER_USER, "env"),
+        ("SQLSERVER_PWD", _mask_secret(config.SQLSERVER_PWD), "env"),
+        ("NIGHTLY_SCHEDULE_TIME", os.environ.get("NIGHTLY_SCHEDULE_TIME", "01:00"), "env"),
+        ("DB_PATH", DB_PATH, "config.py"),
+    ], columns=["Parametro", "Valore", "Fonte"]),
+        use_container_width=True, hide_index=True)
+
+    st.markdown("**\U0001f511 Quota Gemini per chiave**")
+    _usage = gemini_key_usage()
+    if _usage:
+        st.dataframe(pd.DataFrame([
+            {
+                "Chiave": f"...{u['tail']}",
+                "Chiamate oggi": u["calls"],
+                "Budget": config.GEMINI_DAILY_LIMIT,
+                "Residuo": max(0, config.GEMINI_DAILY_LIMIT - u["calls"]),
+                "Stato": ("\U0001f534 esaurita" if u["exhausted"]
+                          or u["calls"] >= config.GEMINI_DAILY_LIMIT
+                          else "\U0001f7e2 attiva"),
+            }
+            for u in _usage
+        ]), use_container_width=True, hide_index=True)
+    else:
+        st.caption("Nessuna chiave Gemini configurata.")
+
+    st.divider()
+
+    # ------------------------------------------------------------------
     # MONITOR PIPELINE LIVE (auto-refresh ogni 2s)
     # ------------------------------------------------------------------
-    st.subheader("📡 Monitor Pipeline in Tempo Reale")
+    st.subheader("\U0001f4e1 Monitor Pipeline in Tempo Reale")
 
     _PIPELINE_LOG_PATH = os.path.join(os.path.dirname(DB_PATH),
                                       "pipeline_run.log")
