@@ -93,12 +93,15 @@ def _goto(section_label: str):
     st.session_state["nav_section"] = section_label
 
 
-_ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+_ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "data", "llm_settings.env")
 
 
 def _env_set(key: str, value: str):
-    """Persiste una variabile nel file .env locale (update o append)."""
+    """Persiste una variabile in data/llm_settings.env (volume Docker
+    app_data: sopravvive a refresh, riavvio e redeploy Coolify)."""
     lines = []
+    os.makedirs(os.path.dirname(_ENV_PATH), exist_ok=True)
     if os.path.exists(_ENV_PATH):
         with open(_ENV_PATH, encoding="utf-8") as f:
             lines = f.readlines()
