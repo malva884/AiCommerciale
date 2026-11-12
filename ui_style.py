@@ -1,159 +1,576 @@
-"""Stile UI 'Metriks-like': tema scuro navy, accento viola, nav laterale, KPI tile."""
+"""Stile UI 'Metriks Suite' pixel-perfect: tema dark navy, sidebar, KPI sparkline, agent panel."""
 import streamlit as st
 
 CSS = """
 <style>
-:root { --mk-bg:#0c1120; --mk-panel:#141b31; --mk-border:#222b48;
-        --mk-text:#e7eaf5; --mk-dim:#8d96b8; --mk-purple:#7c5cff; }
-.stApp, .block-container { background: var(--mk-bg); }
-.block-container { padding-top: 1.6rem; max-width: 1400px; }
-section[data-testid="stSidebar"] { background: #0a0f1e;
-    border-right: 1px solid var(--mk-border); }
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
 
-/* ---------- brand sidebar ---------- */
-.mk-brand { display: flex; align-items: center; gap: .65rem;
-            padding: .1rem 0 1rem 0; }
-.mk-brand .logo { width: 38px; height: 38px; border-radius: 11px; display: flex;
-    align-items: center; justify-content: center; font-size: 1.2rem; color: #fff;
-    background: linear-gradient(135deg, #5a3fd6, #8b5cf6);
-    box-shadow: 0 4px 14px rgba(124,92,255,.4); }
-.mk-brand .name { font-weight: 800; font-size: 1.05rem; color: #fff; line-height: 1.1; }
-.mk-brand .sub { font-size: .68rem; color: var(--mk-dim);
-                 letter-spacing: .09em; text-transform: uppercase; }
+:root {
+    --mk-bg: #080c18;
+    --mk-sidebar: #050811;
+    --mk-card: #0f1526;
+    --mk-card-hover: #141c32;
+    --mk-border: #1a2238;
+    --mk-border-focus: #7c5cff;
+    --mk-purple: #7c5cff;
+    --mk-purple-glow: rgba(124, 92, 255, 0.28);
+    --mk-purple-active: #1c1538;
+    --mk-text: #f1f5f9;
+    --mk-text-dim: #818ba4;
+    --mk-text-muted: #525c76;
+    --mk-green: #10b981;
+    --mk-green-bg: rgba(16, 185, 129, 0.12);
+    --mk-amber: #f59e0b;
+    --mk-amber-bg: rgba(245, 158, 11, 0.12);
+    --mk-blue: #3b82f6;
+    --mk-blue-bg: rgba(59, 130, 246, 0.12);
+}
 
-/* ---------- nav laterale ---------- */
+html, body, [class*="css"], .stApp {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif !important;
+    background-color: var(--mk-bg) !important;
+    color: var(--mk-text) !important;
+}
+
+.block-container {
+    padding-top: 1.5rem !important;
+    padding-bottom: 3rem !important;
+    max-width: 1440px !important;
+}
+
+/* ==========================================================================
+   SIDEBAR METRIKS SUITE IDENTICA ALLA FOTO
+   ========================================================================== */
+section[data-testid="stSidebar"] {
+    background-color: var(--mk-sidebar) !important;
+    border-right: 1px solid var(--mk-border) !important;
+    width: 270px !important;
+}
+
+section[data-testid="stSidebar"] > div:first-child {
+    padding-top: 1.2rem !important;
+    padding-left: 0.9rem !important;
+    padding-right: 0.9rem !important;
+}
+
+/* Brand Metriks Suite con Cubo Wireframe 3D */
+.mk-brand-container {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    padding: 6px 10px 22px 8px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.mk-cube-svg {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+}
+
+.mk-brand-title {
+    font-size: 1.22rem;
+    font-weight: 700;
+    color: #ffffff;
+    letter-spacing: -0.02em;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.mk-brand-badge {
+    font-size: 0.65rem;
+    font-weight: 600;
+    background: rgba(124, 92, 255, 0.2);
+    border: 1px solid rgba(124, 92, 255, 0.4);
+    color: #c4b5fd;
+    padding: 1px 6px;
+    border-radius: 999px;
+    text-transform: uppercase;
+}
+
+/* Nascondi il pallino nativo del radio button di Streamlit */
+section[data-testid="stSidebar"] div[role="radiogroup"] label > div:first-child {
+    display: none !important;
+}
+
+/* Menu items sidebar identici a Metriks */
+section[data-testid="stSidebar"] div[role="radiogroup"] {
+    gap: 4px !important;
+}
+
 section[data-testid="stSidebar"] div[role="radiogroup"] label {
-    padding: .5rem .85rem; border-radius: 10px; margin-bottom: 2px;
-    transition: background .12s ease; border-left: 3px solid transparent; }
-section[data-testid="stSidebar"] div[role="radiogroup"] label:hover { background: #141b31; }
+    display: flex !important;
+    align-items: center !important;
+    padding: 10px 14px !important;
+    border-radius: 12px !important;
+    color: #8b95af !important;
+    font-size: 0.92rem !important;
+    font-weight: 500 !important;
+    cursor: pointer !important;
+    background: transparent !important;
+    border: 1px solid transparent !important;
+    margin: 0 !important;
+    transition: all 0.16s ease !important;
+}
+
+section[data-testid="stSidebar"] div[role="radiogroup"] label:hover {
+    background: #111728 !important;
+    color: #e2e8f0 !important;
+}
+
+/* Voce attiva con rettangolo viola e glow (esattamente come 'Documenti' nella foto) */
 section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {
-    background: linear-gradient(90deg, #5a3fd6, #7c5cff);
-    border-left: 3px solid #b79bff; }
+    background: var(--mk-purple-active) !important;
+    border: 1px solid var(--mk-purple) !important;
+    box-shadow: 0 0 18px var(--mk-purple-glow), inset 0 0 12px rgba(124, 92, 255, 0.12) !important;
+}
+
 section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) p {
-    color: #fff !important; font-weight: 600; }
+    color: #ffffff !important;
+    font-weight: 600 !important;
+}
 
-/* ---------- page header ---------- */
-.mk-ph { margin-bottom: 1.15rem; }
-.mk-ph h1 { color: #fff !important; font-size: 1.9rem; font-weight: 800;
-            margin: 0; padding: 0; }
-.mk-ph p { color: var(--mk-dim); margin: .15rem 0 0 0; font-size: .95rem; }
+section[data-testid="stSidebar"] div[role="radiogroup"] label p {
+    font-size: 0.92rem !important;
+    margin: 0 !important;
+}
 
-/* ---------- kpi tiles ---------- */
-.mk-kpis { display: grid; grid-template-columns: repeat(4, 1fr);
-           gap: 1rem; margin-bottom: 1.2rem; }
-.mk-kpi { background: var(--mk-panel); border: 1px solid var(--mk-border);
-          border-radius: 14px; padding: 1rem 1.1rem; display: flex;
-          gap: .85rem; align-items: flex-start; }
-.mk-kpi .ico { min-width: 42px; height: 42px; border-radius: 11px; display: flex;
-    align-items: center; justify-content: center; font-size: 1.25rem;
-    background: rgba(124,92,255,.16); border: 1px solid rgba(124,92,255,.35); }
-.mk-kpi .v { font-size: 1.6rem; font-weight: 800; color: #fff; line-height: 1.1; }
-.mk-kpi .l { font-size: .8rem; color: var(--mk-text); font-weight: 600; }
-.mk-kpi .cap { font-size: .72rem; color: var(--mk-dim); margin-top: .15rem; }
-@media (max-width: 1100px) { .mk-kpis { grid-template-columns: 1fr 1fr; } }
-@media (max-width: 560px) { .mk-kpis { grid-template-columns: 1fr; } }
+/* Footer notifiche in fondo alla sidebar */
+.mk-notif-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 11px 14px;
+    border-radius: 12px;
+    background: #101627;
+    border: 1px solid var(--mk-border);
+    margin-top: 24px;
+    color: var(--mk-text-dim);
+    font-size: 0.88rem;
+    font-weight: 500;
+}
 
-/* ---------- agent cards ---------- */
-.mk-agents { display: grid; grid-template-columns: repeat(3, 1fr);
-             gap: 1rem; margin: .4rem 0 1.2rem; }
-.mk-card { background: var(--mk-panel); border: 1px solid var(--mk-border);
-           border-radius: 14px; padding: 1.05rem 1.15rem;
-           transition: transform .15s ease, border-color .15s ease; }
-.mk-card:hover { transform: translateY(-3px); border-color: var(--mk-purple); }
-.mk-card .mk-ico { width: 38px; height: 38px; border-radius: 10px; display: flex;
-    align-items: center; justify-content: center; font-size: 1.15rem;
-    background: rgba(124,92,255,.16); border: 1px solid rgba(124,92,255,.35);
-    margin-bottom: .55rem; }
-.mk-card h4 { margin: 0 0 .25rem 0; font-size: .98rem; color: #fff; }
-.mk-card p { margin: 0; font-size: .8rem; color: var(--mk-dim); line-height: 1.45; }
-@media (max-width: 900px) { .mk-agents { grid-template-columns: 1fr 1fr; } }
-@media (max-width: 560px) { .mk-agents { grid-template-columns: 1fr; } }
+.mk-notif-pill {
+    background: #251b47;
+    color: #c4b5fd;
+    border: 1px solid rgba(124, 92, 255, 0.4);
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 999px;
+}
 
-/* ---------- componenti streamlit ---------- */
-div[data-testid="stMetric"] { background: var(--mk-panel);
-    border: 1px solid var(--mk-border); border-radius: 14px; padding: .6rem 1rem; }
-.stTabs [data-baseweb="tab-list"] { gap: .4rem; }
-.stTabs [data-baseweb="tab"] { background: #141b31; border: 1px solid var(--mk-border);
-    border-radius: 10px; padding: .35rem .9rem; font-weight: 600; }
-.stTabs [aria-selected="true"] { background: var(--mk-purple);
-    border-color: var(--mk-purple); }
-.stTabs [aria-selected="true"] p { color: #fff !important; }
-.stButton > button { border-radius: 10px; font-weight: 600; }
+/* ==========================================================================
+   HEADER PRINCIPALE: TITOLO BOLD + SOTTOTITOLO + DATA PILL IN ALTO A DESTRA
+   ========================================================================== */
+.mk-top-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 22px;
+}
+
+.mk-top-title {
+    font-size: 2.1rem;
+    font-weight: 800;
+    color: #ffffff;
+    letter-spacing: -0.03em;
+    margin: 0 0 4px 0;
+    line-height: 1.15;
+}
+
+.mk-top-sub {
+    font-size: 0.98rem;
+    color: var(--mk-text-dim);
+    margin: 0;
+    font-weight: 400;
+}
+
+.mk-date-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background: var(--mk-card);
+    border: 1px solid var(--mk-border);
+    border-radius: 12px;
+    font-size: 0.85rem;
+    color: #cbd5e1;
+    font-weight: 500;
+}
+
+/* ==========================================================================
+   KPI TILES IDENTICHE ALLA FOTO (CON ICONE, DELTA VERDE/ARANCIO E SPARKLINE SVG)
+   ========================================================================== */
+.mk-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.mk-kpi-card {
+    background: var(--mk-card);
+    border: 1px solid var(--mk-border);
+    border-radius: 16px;
+    padding: 18px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: relative;
+    transition: transform 0.15s ease, border-color 0.15s ease;
+}
+
+.mk-kpi-card:hover {
+    border-color: rgba(124, 92, 255, 0.4);
+    transform: translateY(-2px);
+}
+
+.mk-kpi-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.mk-kpi-icon-box {
+    width: 48px;
+    height: 48px;
+    border-radius: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.mk-kpi-icon-purple {
+    background: #241c49;
+    border: 1px solid rgba(124, 92, 255, 0.35);
+    color: #a78bfa;
+}
+
+.mk-kpi-icon-blue {
+    background: #172242;
+    border: 1px solid rgba(59, 130, 246, 0.35);
+    color: #60a5fa;
+}
+
+.mk-kpi-icon-amber {
+    background: #332111;
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    color: #fbbf24;
+}
+
+.mk-kpi-label {
+    font-size: 0.82rem;
+    color: var(--mk-text-dim);
+    font-weight: 500;
+    margin-bottom: 4px;
+}
+
+.mk-kpi-val-row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+}
+
+.mk-kpi-val {
+    font-size: 1.85rem;
+    font-weight: 800;
+    color: #ffffff;
+    line-height: 1;
+}
+
+.mk-kpi-delta {
+    font-size: 0.78rem;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.mk-delta-green {
+    color: var(--mk-green);
+    background: var(--mk-green-bg);
+}
+
+.mk-delta-amber {
+    color: var(--mk-amber);
+    background: var(--mk-amber-bg);
+}
+
+.mk-kpi-sub {
+    font-size: 0.72rem;
+    color: var(--mk-text-muted);
+    margin-top: 4px;
+}
+
+.mk-sparkline-svg {
+    width: 88px;
+    height: 38px;
+    flex-shrink: 0;
+}
+
+/* ==========================================================================
+   PANNELLO / CARD PRINCIPALE IN STILE METRIKS
+   ========================================================================== */
+.mk-panel {
+    background: var(--mk-card);
+    border: 1px solid var(--mk-border);
+    border-radius: 16px;
+    padding: 22px 24px;
+    margin-bottom: 20px;
+}
+
+.mk-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+}
+
+.mk-panel-title {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #ffffff;
+    margin: 0;
+}
+
+/* Status badges identici allo screenshot */
+.mk-badge-status {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-align: center;
+}
+
+.mk-badge-completo {
+    background: rgba(16, 185, 129, 0.15);
+    border: 1px solid rgba(16, 185, 129, 0.4);
+    color: #34d399;
+}
+
+.mk-badge-aggiornare {
+    background: rgba(245, 158, 11, 0.15);
+    border: 1px solid rgba(245, 158, 11, 0.4);
+    color: #fbbf24;
+}
+
+.mk-badge-verifica {
+    background: rgba(59, 130, 246, 0.15);
+    border: 1px solid rgba(59, 130, 246, 0.4);
+    color: #93c5fd;
+}
+
+/* ==========================================================================
+   AGENT PANEL LATERALE (STILE 'HR AGENT' A DESTRA NELLA FOTO)
+   ========================================================================== */
+.mk-agent-sidecard {
+    background: var(--mk-card);
+    border: 1px solid var(--mk-border);
+    border-radius: 16px;
+    padding: 18px 20px;
+    margin-bottom: 20px;
+}
+
+.mk-agent-sidecard-title {
+    font-size: 1.02rem;
+    font-weight: 700;
+    color: #ffffff;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.mk-agent-alert-box {
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px solid rgba(245, 158, 11, 0.28);
+    border-radius: 12px;
+    padding: 12px 14px;
+    color: #fbbf24;
+    font-size: 0.84rem;
+    margin-bottom: 14px;
+    line-height: 1.4;
+}
+
+/* ==========================================================================
+   STREAMLIT NATIVE ELEMENTS TWEAKS
+   ========================================================================== */
+div[data-testid="stDataFrame"], div[data-testid="stTable"] {
+    background: var(--mk-card) !important;
+    border: 1px solid var(--mk-border) !important;
+    border-radius: 14px !important;
+    overflow: hidden !important;
+}
+
+div[data-testid="stExpander"] {
+    background: var(--mk-card) !important;
+    border: 1px solid var(--mk-border) !important;
+    border-radius: 14px !important;
+}
+
+.stTabs [data-baseweb="tab-list"] {
+    gap: 8px !important;
+    background: transparent !important;
+}
+
+.stTabs [data-baseweb="tab"] {
+    background: #111728 !important;
+    border: 1px solid var(--mk-border) !important;
+    border-radius: 10px !important;
+    color: #94a3b8 !important;
+    padding: 8px 16px !important;
+    font-weight: 600 !important;
+}
+
+.stTabs [aria-selected="true"] {
+    background: var(--mk-purple) !important;
+    border-color: var(--mk-purple) !important;
+    color: #ffffff !important;
+}
+
+.stTabs [aria-selected="true"] p {
+    color: #ffffff !important;
+}
+
+.stButton > button {
+    border-radius: 10px !important;
+    font-weight: 600 !important;
+    border: 1px solid var(--mk-border) !important;
+    background: #151c30 !important;
+    color: #f1f5f9 !important;
+}
+
+.stButton > button:hover {
+    border-color: var(--mk-purple) !important;
+    color: #ffffff !important;
+}
+
 .stButton > button[kind="primary"] {
-    background: linear-gradient(90deg, #5a3fd6, #8b5cf6); border: none; }
-div[data-testid="stDataFrame"], div[data-testid="stExpander"] {
-    border: 1px solid var(--mk-border); border-radius: 14px; overflow: hidden; }
-hr { border-color: var(--mk-border); }
-.stTextInput input, .stTextArea textarea {
-    background: #141b31 !important; border: 1px solid var(--mk-border) !important;
-    border-radius: 10px !important; color: var(--mk-text) !important; }
+    background: linear-gradient(90deg, #5b3fd6, #7c5cff) !important;
+    border: none !important;
+    box-shadow: 0 4px 14px rgba(124, 92, 255, 0.35) !important;
+}
+
+.stTextInput input, .stTextArea textarea, .stSelectbox [data-baseweb="select"] {
+    background: #111728 !important;
+    border: 1px solid var(--mk-border) !important;
+    border-radius: 10px !important;
+    color: #f1f5f9 !important;
+}
+
+@media (max-width: 1050px) {
+    .mk-kpi-grid { grid-template-columns: 1fr; }
+}
 </style>
 """
 
 
 def inject_styles():
-    """Inietta il CSS del tema scuro 'Metriks-like' (navy + viola)."""
+    """Inietta il CSS completo del tema Metriks Suite."""
     st.markdown(CSS, unsafe_allow_html=True)
 
 
 def brand():
-    """Logo + nome suite in cima alla sidebar (stile Metriks)."""
-    st.sidebar.markdown(
-        '<div class="mk-brand"><div class="logo">\u26a1</div>'
-        '<div><div class="name">AiCommerciale</div>'
-        '<div class="sub">AI Sales Suite</div></div></div>',
-        unsafe_allow_html=True)
+    """Logo e brand Metriks Suite identici alla foto con cubo wireframe 3D isometrico."""
+    st.sidebar.markdown("""
+    <div class="mk-brand-container">
+      <svg class="mk-cube-svg" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M16 2L28 8.5V22.5L16 29L4 22.5V8.5L16 2Z" stroke="#ffffff" stroke-width="1.8" stroke-linejoin="round"/>
+        <path d="M16 2V15.5" stroke="#ffffff" stroke-width="1.8" stroke-linejoin="round"/>
+        <path d="M16 15.5L28 8.5" stroke="#ffffff" stroke-width="1.8" stroke-linejoin="round"/>
+        <path d="M16 15.5L4 8.5" stroke="#ffffff" stroke-width="1.8" stroke-linejoin="round"/>
+        <path d="M16 29V15.5" stroke="#ffffff" stroke-width="1.8" stroke-linejoin="round"/>
+        <circle cx="21" cy="6" r="1.5" fill="#a78bfa"/>
+        <path d="M21 4V8M19 6H23" stroke="#a78bfa" stroke-width="1.3"/>
+      </svg>
+      <div>
+        <div class="mk-brand-title">Metriks<span style="font-weight:300; opacity:0.9;">Suite</span></div>
+        <span class="mk-brand-badge">Commerciale B2B</span>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
-_SUBTITLES = {
-    "\U0001f3e0 Panoramica": "La tua suite di agenti AI per lo sviluppo commerciale",
-    "\U0001f3af Tender Intelligence & News": "Segnali da news e bandi TED scorati dall'AI",
-    "\U0001f4c4 RFP & Capitolati Analyzer": "Analisi capitolati, requisiti e strategia d'offerta",
-    "\U0001f3e2 Account Research & Dossier": "Schede account e preparazione meeting da fonti pubbliche",
-    "\U0001f4ca CRM & Retention Ordini": "Periodicita', retention e cross-selling da ERP",
-    "\U0001f680 New Business & Lookalike UE": "Prospect gemelli in Europa e outreach multilingua",
-    "\U0001f527 Admin & Logs": "Motore AI, quota Gemini, monitor pipeline e log errori",
-}
+def sidebar_footer(unresolved_count: int = 0):
+    """Pill notifiche/errori fissato sul fondo della sidebar (identico alla foto)."""
+    badge_label = str(unresolved_count) if unresolved_count > 0 else "0"
+    st.sidebar.markdown(f"""
+    <div class="mk-notif-bar">
+      <span>🔔 Notifiche & Stato</span>
+      <span class="mk-notif-pill">{badge_label}</span>
+    </div>
+    """, unsafe_allow_html=True)
 
 
-def page_header(section: str):
-    """Header compatto di sezione: titolo bold + sottotitolo dim (stile Metriks)."""
-    sub = _SUBTITLES.get(section, "")
-    st.markdown(f'<div class="mk-ph"><h1>{section}</h1><p>{sub}</p></div>',
-                unsafe_allow_html=True)
+def page_header(title: str, subtitle: str, date_tag: str = "Novembre 2026"):
+    """Header compatto della pagina con titolo bold, sottotitolo e pill della data in alto a destra."""
+    st.markdown(f"""
+    <div class="mk-top-header">
+      <div>
+        <div class="mk-top-title">{title}</div>
+        <div class="mk-top-sub">{subtitle}</div>
+      </div>
+      <div class="mk-date-pill">
+        📅 {date_tag}
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
-def kpi_tiles(items):
-    """Tile KPI scure: icona in quadrato viola, valore, label e caption.
-    items: lista di tuple (icona, label, valore, caption)."""
-    tiles = "".join(
-        f'<div class="mk-kpi"><div class="ico">{i}</div>'
-        f'<div><div class="l">{l}</div><div class="v">{v}</div>'
-        f'<div class="cap">{c}</div></div></div>'
-        for i, l, v, c in items)
-    st.markdown(f'<div class="mk-kpis">{tiles}</div>', unsafe_allow_html=True)
+def kpi_cards_row(kpis: list[dict]):
+    """Griglia di 3 KPI cards identiche alla foto con icona colorata, delta verde/arancio e sparkline SVG.
+    Ogni dict: {icon, label, value, delta, sub, variant: 'purple'|'blue'|'amber'}"""
+    cards_html = []
+    
+    sparkline_purple = """
+    <svg class="mk-sparkline-svg" viewBox="0 0 100 40" fill="none">
+      <path d="M4 32 C 22 28, 30 18, 48 24 C 66 30, 76 8, 96 12" stroke="#8b5cf6" stroke-width="2.6" stroke-linecap="round"/>
+      <circle cx="96" cy="12" r="2.8" fill="#8b5cf6"/>
+    </svg>
+    """
+    sparkline_blue = """
+    <svg class="mk-sparkline-svg" viewBox="0 0 100 40" fill="none">
+      <path d="M4 28 C 24 34, 38 12, 58 20 C 74 26, 82 6, 96 10" stroke="#3b82f6" stroke-width="2.6" stroke-linecap="round"/>
+      <circle cx="96" cy="10" r="2.8" fill="#3b82f6"/>
+    </svg>
+    """
+    sparkline_amber = """
+    <svg class="mk-sparkline-svg" viewBox="0 0 100 40" fill="none">
+      <path d="M4 24 C 20 20, 40 32, 60 16 C 78 4, 86 14, 96 8" stroke="#f59e0b" stroke-width="2.6" stroke-linecap="round"/>
+      <circle cx="96" cy="8" r="2.8" fill="#f59e0b"/>
+    </svg>
+    """
 
+    for k in kpis:
+        variant = k.get("variant", "purple")
+        icon_cls = f"mk-kpi-icon-{variant}"
+        delta_cls = "mk-delta-amber" if variant == "amber" else "mk-delta-green"
+        spk = sparkline_amber if variant == "amber" else (sparkline_blue if variant == "blue" else sparkline_purple)
+        
+        cards_html.append(f"""
+        <div class="mk-kpi-card">
+          <div class="mk-kpi-left">
+            <div class="mk-kpi-icon-box {icon_cls}">
+              <span style="font-size:1.35rem;">{k['icon']}</span>
+            </div>
+            <div>
+              <div class="mk-kpi-label">{k['label']}</div>
+              <div class="mk-kpi-val-row">
+                <div class="mk-kpi-val">{k['value']}</div>
+                <div class="mk-kpi-delta {delta_cls}">{k['delta']}</div>
+              </div>
+              <div class="mk-kpi-sub">{k['sub']}</div>
+            </div>
+          </div>
+          <div>{spk}</div>
+        </div>
+        """)
 
-_AGENTS = [
-    ("\U0001f3af", "Tender Intelligence",
-     "News RSS e bandi TED scorati dall'AI: priorita' commerciale, settore e prossima azione."),
-    ("\U0001f4c4", "RFP Analyzer",
-     "Capitolati e gare letti dall'LLM: requisiti, scadenze, criteri e strategia d'offerta."),
-    ("\U0001f3e2", "Account Dossier",
-     "Scheda cliente da fonti pubbliche: fatturato, struttura, progetti e leve di vendita."),
-    ("\U0001f4ca", "CRM Retention",
-     "Ordini ERP SQL Server: periodicita', salute pipeline e suggerimenti prodotto."),
-    ("\u2709\ufe0f", "Outreach AI",
-     "Email, LinkedIn e cold-call script multilingua generati sul contesto del prospect."),
-    ("\U0001f527", "Admin & Monitor",
-     "Motore AI, quota Gemini per-chiave, log pipeline live e storico errori."),
-]
-
-
-def agent_cards():
-    """Griglia di card scure stile Metriks che presenta gli 'agenti' della suite."""
-    cards = "".join(
-        f'<div class="mk-card"><div class="mk-ico">{i}</div>'
-        f"<h4>{t}</h4><p>{d}</p></div>"
-        for i, t, d in _AGENTS)
-    st.markdown(f'<div class="mk-agents">{cards}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="mk-kpi-grid">{"".join(cards_html)}</div>', unsafe_allow_html=True)
