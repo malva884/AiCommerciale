@@ -82,6 +82,19 @@ CREATE TABLE IF NOT EXISTS app_settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL DEFAULT ''
 );
+
+--- Referenti/decision maker trovati via provider dati (Apollo, Proxycurl)
+CREATE TABLE IF NOT EXISTS contacts (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_name TEXT NOT NULL,             -- azienda target associata
+    full_name    TEXT NOT NULL,
+    title        TEXT NOT NULL DEFAULT '',  -- ruolo dichiarato (es. Category Buyer)
+    linkedin_url TEXT NOT NULL DEFAULT '',
+    email        TEXT NOT NULL DEFAULT '',
+    city         TEXT NOT NULL DEFAULT '',
+    source       TEXT NOT NULL DEFAULT '',  -- apollo | proxycurl
+    fetched_at   TEXT NOT NULL
+);
 """
 
 
@@ -336,6 +349,35 @@ def unresolved_error_count() -> int:
         return conn.execute(
             "SELECT COUNT(*) FROM fetch_errors WHERE resolved=0"
         ).fetchone()[0]
+
+
+# ----------------------------------------------------------------------------
+# CONTATTI / REFERENTI (Apollo.io, Proxycurl)
+# ----------------------------------------------------------------------------
+
+def get_contacts(company_name: str) -> list[dict]:
+    """Referenti gia' recuperati per un'azienda (cache locale)."""
+    with _connect() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM contacts WHERE company_name=? ORDER BY id",
+            (company_name,)).fetchall()]
+
+
+def save_contacts(company_name: str, contacts: list[dict]):
+    """Sostituisce i referenti di un'azienda con l'ultimo set recuperato."""
+    with _connect() as conn:
+        conn.execute("DELETE FROM contacts WHERE company_name=?",
+                     (company_name,))
+        conn.executemany(
+            """INSERT INTO contacts
+               (company_name, full_name, title, linkedin_url, email,
+                city, source, fetched_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            [(company_name, c.get("full_name", ""), c.get("title", ""),
+              c.get("linkedin_url", ""), c.get("email", ""),
+              c.get("city", ""), c.get("source", ""),
+              datetime.now().isoformat(timespec="seconds"))
+             for c in contacts])
 
 
 def mark_errors_resolved(ids: list[int]):

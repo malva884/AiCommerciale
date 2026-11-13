@@ -12,8 +12,9 @@ import pandas as pd
 import requests
 import streamlit as st
 
-import db
+import contact_finder
 import config
+import db
 import ui_style
 from account_research import generate_account_dossier
 from company_enrich import enrich_company, format_amount
@@ -114,6 +115,55 @@ def _persist_llm_settings():
                    "1" if st.session_state.get("no_ollama_fallback") else "0")
 
 
+def _persist_contact_settings():
+    """on_change dei widget Ricerca Referenti: salva provider e chiavi
+    API nella tabella app_settings (persistono su refresh/restart)."""
+    db.set_setting("CONTACT_PROVIDER",
+                   st.session_state.get("contact_provider_sel", "apollo"))
+    db.set_setting("APOLLO_API_KEY",
+                   st.session_state.get("apollo_api_key_ui", "").strip())
+    db.set_setting("PROXYCURL_API_KEY",
+                   st.session_state.get("proxycurl_api_key_ui", "").strip())
+
+
+def _contact_line(c: dict) -> str:
+    """Riga markdown di un referente: nome linkato al profilo LinkedIn."""
+    name = (f"[**{c['full_name']}**]({c['linkedin_url']})"
+            if c.get("linkedin_url") else f"**{c['full_name']}**")
+    meta = " · ".join(m for m in
+                      [c.get("title"), c.get("email"), c.get("city")] if m)
+    return f"- 👤 {name}" + (f" — {meta}" if meta else "")
+
+
+def _render_buyer_contacts(company_name: str, key_prefix: str,
+                           roles: list | None = None,
+                           quiet: bool = False):
+    """Mostra i referenti reali (cache DB) e il bottone di fetch on-demand.
+    Senza chiave API la funzione degrada pulita: resta il link di ricerca
+    LinkedIn classico. `quiet=True` sopprime il suggerimento di config
+    (liste lunghe di prospect)."""
+    cached = db.get_contacts(company_name)
+    for c in cached:
+        st.markdown(_contact_line(c))
+    if not contact_finder.is_configured():
+        if not cached and not quiet:
+            st.caption("👥 Configura una chiave API (Apollo o Proxycurl) in "
+                       "✨ AI & Agenti per elencare qui i referenti reali.")
+        return
+    btn = "🔄 Aggiorna referenti" if cached else "👥 Trova referenti"
+    if st.button(btn, key=f"{key_prefix}_findbuyers"):
+        with st.spinner(f"Ricerca referenti {company_name}..."):
+            contacts, err = contact_finder.find_buyers(
+                company_name, roles=roles)
+        if err:
+            st.warning(f"Ricerca referenti non riuscita: {err}")
+        elif not contacts:
+            st.info("Nessun referente trovato con i ruoli buyer.")
+        else:
+            db.save_contacts(company_name, contacts)
+            st.rerun()
+
+
 # ==============================================================================
 # STATO MOTORE AI: eseguito a OGNI rerun (letto da session_state, non dai widget)
 # ==============================================================================
@@ -144,6 +194,16 @@ st.session_state.setdefault("ollama_model_sel",
 st.session_state.setdefault("no_ollama_fallback",
                             (_db_fallback == "1") if _db_fallback is not None
                             else config.DISABLE_OLLAMA_FALLBACK)
+st.session_state.setdefault(
+    "contact_provider_sel",
+    db.get_setting("CONTACT_PROVIDER") or "apollo")
+st.session_state.setdefault(
+    "apollo_api_key_ui",
+    db.get_setting("APOLLO_API_KEY") or os.environ.get("APOLLO_API_KEY", ""))
+st.session_state.setdefault(
+    "proxycurl_api_key_ui",
+    db.get_setting("PROXYCURL_API_KEY")
+    or os.environ.get("PROXYCURL_API_KEY", ""))
 set_ollama_fallback(not st.session_state["no_ollama_fallback"])
 
 selected_llm_label = st.session_state["provider_radio"]
@@ -443,6 +503,42 @@ if section == _SECTIONS[6]:
             st.warning("🔴 Ollama offline (fallback euristico attivo)")
 
     st.divider()
+    st.subheader("👥 Ricerca Referenti (LinkedIn)")
+    st.caption("LinkedIn non espone API pubbliche di people-search: l'agente "
+               "interroga un provider dati terzo. Senza chiave resta attivo "
+               "il link di ricerca LinkedIn manuale (nessuna regressione).")
+    st.selectbox(
+        "Provider dati referenti:",
+        list(contact_finder.PROVIDERS.keys()),
+        format_func=lambda k: contact_finder.PROVIDERS[k],
+        key="contact_provider_sel",
+        on_change=_persist_contact_settings,
+    )
+    _ck1, _ck2 = st.columns(2)
+    _ck1.text_input(
+        "Apollo API Key",
+        type="password",
+        key="apollo_api_key_ui",
+        on_change=_persist_contact_settings,
+        help="Chiave API di Apollo.io (People Search: nome, ruolo, "
+             "profilo LinkedIn ed email dei decision maker).",
+    )
+    _ck2.text_input(
+        "Proxycurl API Key",
+        type="password",
+        key="proxycurl_api_key_ui",
+        on_change=_persist_contact_settings,
+        help="Chiave API di Proxycurl (nubela.co): elenco dipendenti "
+             "LinkedIn filtrato per ruolo, pay-per-use.",
+    )
+    if contact_finder.is_configured():
+        st.success("🟢 Ricerca referenti attiva — "
+                   f"{contact_finder.active_provider_label()}")
+    else:
+        st.info("⚪ Nessuna chiave configurata: nelle opportunità resta il "
+                "link di ricerca manuale su LinkedIn.")
+
+    st.divider()
 
 
 def _company_brief(info: dict) -> str:
@@ -604,6 +700,10 @@ if section == _SECTIONS[1]:
                         encoded_li = urllib.parse.quote(f"{target_name} Procurement Cables OR Purchases OR Electrical")
                         li_url = f"https://www.linkedin.com/search/results/people/?keywords={encoded_li}"
                         st.markdown(f"[🔗 **Cerca Responsabili Acquisti / Buyer {target_name} su LinkedIn**]({li_url})")
+
+                        # Referenti reali via provider dati (Apollo/Proxycurl)
+                        _render_buyer_contacts(
+                            target_name, key_prefix=f"opp_{row['id']}")
 
                     if row["motivation"]:
                         st.markdown(f"💡 **Analisi Commerciale & Rilevanza:** {row['motivation']}")
@@ -1096,6 +1196,9 @@ if section == _SECTIONS[5]:
                     if p["scraped_context"]:
                         with st.expander("🌐 Contesto dal sito ufficiale"):
                             st.caption(p["scraped_context"][:900])
+                    _render_buyer_contacts(
+                        p["company_name"], key_prefix=f"prosp_{p['id']}",
+                        quiet=True)
                     st.divider()
         else:
             st.info("Nessun prospect nel DB dinamico. Clicca **'🔄 Aggiorna Prospect'** per popolarlo da ERP + Wikidata + bandi, oppure consulta la lista seme qui sotto.")
@@ -1105,7 +1208,7 @@ if section == _SECTIONS[5]:
                 sector_filter=sel_sector,
                 search_query=search_prospect,
             )
-            for p in prospects:
+            for i, p in enumerate(prospects):
                 with st.container():
                     hdr_col1, hdr_col2 = st.columns([3, 1])
                     with hdr_col1:
@@ -1113,6 +1216,9 @@ if section == _SECTIONS[5]:
                         st.caption(f"Settore: `{p['sector']}` | Profilo: **{p['company_type']}**")
                     with hdr_col2:
                         st.markdown(f"[🔗 **Cerca Buyer su LinkedIn**]({p['linkedin_url']})")
+                    _render_buyer_contacts(
+                        p["company_name"], key_prefix=f"seed_{i}",
+                        roles=p.get("target_buyer_roles"), quiet=True)
                     st.divider()
 
     # --------------------------------------------------------------------------
