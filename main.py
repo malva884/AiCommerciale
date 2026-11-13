@@ -44,15 +44,21 @@ def run(use_llm: bool = True, provider: str | None = None):
          f"({len(items) - inserted} duplicati scartati).")
 
     if use_llm:
-        to_score = db.unscored(limit=250, include_heuristic=False)
-        if active_provider == "gemini":
+        budget = max(0, GEMINI_DAILY_LIMIT * gemini_keys_count() - db.llm_calls_today())
+        is_gemini = active_provider == "gemini"
+        # Con Gemini il tetto reale e' la quota giornaliera, non 250: gli item
+        # scartati dall'euristica non consumano chiamate API. include_heuristic
+        # rimette in coda gli item valutati solo col fallback (es. durante i
+        # 503 di Gemini), promuovendoli a scoring LLM al run utile successivo.
+        limit = min(1000, max(250, budget + 300)) if is_gemini else 250
+        to_score = db.unscored(limit=limit, include_heuristic=is_gemini)
+        if is_gemini:
             # La quota giornaliera va ai candidati piu' promettenti: ordina per
             # score euristico decrescente (scoring rapido, zero chiamate API).
             to_score.sort(
                 key=lambda r: heuristic_prescore(
                     r["title"], r["text"] or "", r["country"]),
                 reverse=True)
-        budget = max(0, GEMINI_DAILY_LIMIT * gemini_keys_count() - db.llm_calls_today())
         _log(f"Scoring AI in corso: {len(to_score)} opportunita' da valutare "
              f"(provider={active_provider.upper()}, budget Gemini residuo: {budget})")
         for i, row in enumerate(to_score, 1):
