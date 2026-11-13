@@ -27,6 +27,8 @@ _TIMEOUT = 30
 # NB: /mixed_people/search e' deprecato (risponde 422) — il nuovo endpoint
 # per chiamate API e' /mixed_people/api_search. Auth via header x-api-key.
 _APOLLO_SEARCH_URL = "https://api.apollo.io/api/v1/mixed_people/api_search"
+# Bulk Enrich: rivela nome completo, email e mansione (consuma crediti Apollo)
+_APOLLO_ENRICH_URL = "https://api.apollo.io/api/v1/people/bulk_match"
 _PROXYCURL_BASE = "https://nubela.co/proxycurl/api"
 
 
@@ -103,23 +105,62 @@ def _apollo_search(company_name: str, roles: list[str] | None,
     )
     if resp.status_code >= 400:
         return [], f"Apollo HTTP {resp.status_code}: {resp.text[:200]}"
+    people = resp.json().get("people", [])[:limit]
+    # Enrich (a crediti): rivela cognome completo ed email aziendale
+    enriched = _apollo_enrich(people, key)
     contacts = []
-    for p in resp.json().get("people", [])[:limit]:
-        name = p.get("name") or " ".join(filter(None, [
-            p.get("first_name"), p.get("last_name")])).strip()
+    for p in people:
+        e = enriched.get(p.get("id")) or {}
+        name = (e.get("name") or p.get("name")
+                or " ".join(filter(None, [e.get("first_name") or p.get("first_name"),
+                                          e.get("last_name") or p.get("last_name")])).strip())
         if not name:
             continue
         contacts.append({
             "full_name": name,
-            "title": p.get("title") or "",
-            "linkedin_url": p.get("linkedin_url") or "",
-            # il people-search NON ritorna email (serve Enrich, a crediti):
-            # lascio il campo vuoto ma la struttura e' gia' predisposta
-            "email": p.get("email") or "",
-            "city": p.get("city") or "",
+            "title": e.get("title") or p.get("title") or "",
+            "linkedin_url": e.get("linkedin_url") or p.get("linkedin_url") or "",
+            "email": e.get("email") or "",
+            "city": e.get("city") or p.get("city") or "",
             "source": "apollo",
         })
     return contacts, None
+
+
+def _apollo_enrich(people: list[dict], key: str) -> dict:
+    """Bulk Enrich dei profili trovati: ritorna {apollo_id: record} con nome
+    completo, email e mansione. In caso di errore (quota, piano) ritorna {}
+    e i contatti restano con i dati parziali della search."""
+    ids = [p["id"] for p in people if p.get("id")]
+    if not ids:
+        return {}
+    headers = {"Cache-Control": "no-cache",
+               "Content-Type": "application/json",
+               "x-api-key": key}
+    out = {}
+    # bulk_match accetta max 10 profili per chiamata
+    for i in range(0, len(ids), 10):
+        try:
+            r = requests.post(
+                _APOLLO_ENRICH_URL,
+                headers=headers,
+                json={"details": [{"id": pid} for pid in ids[i:i + 10]],
+                      "reveal_personal_emails": True},
+                timeout=_TIMEOUT,
+            )
+            if r.status_code >= 400:
+                db.log_error("contacts", target="apollo_enrich",
+                             error_type="http_error",
+                             message=f"HTTP {r.status_code}: {r.text[:200]}")
+                break
+            for m in r.json().get("matches") or []:
+                if m and m.get("id"):
+                    out[m["id"]] = m
+        except requests.RequestException as exc:
+            db.log_error("contacts", target="apollo_enrich",
+                         error_type=type(exc).__name__, message=str(exc))
+            break
+    return out
 
 
 # ----------------------------------------------------------------------------
