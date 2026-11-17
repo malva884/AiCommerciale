@@ -29,6 +29,9 @@ _TIMEOUT = 30
 _APOLLO_SEARCH_URL = "https://api.apollo.io/api/v1/mixed_people/api_search"
 # Bulk Enrich: rivela nome completo, email e mansione (consuma crediti Apollo)
 _APOLLO_ENRICH_URL = "https://api.apollo.io/api/v1/people/bulk_match"
+# People Match: lookup puntuale di una persona (id o linkedin_url) per il
+# job-change monitoring: ritorna datore di lavoro e ruolo correnti.
+_APOLLO_MATCH_URL = "https://api.apollo.io/api/v1/people/match"
 _PROXYCURL_BASE = "https://nubela.co/proxycurl/api"
 
 
@@ -123,6 +126,7 @@ def _apollo_search(company_name: str, roles: list[str] | None,
             "email": e.get("email") or "",
             "city": e.get("city") or p.get("city") or "",
             "source": "apollo",
+            "person_id": p.get("id") or e.get("id") or "",
         })
     return contacts, None
 
@@ -211,5 +215,70 @@ def _proxycurl_search(company_name: str, roles: list[str] | None,
             "email": "",
             "city": "",
             "source": "proxycurl",
+            "person_id": "",
         })
     return contacts, None
+
+
+# ----------------------------------------------------------------------------
+# PEOPLE MATCH — verifica stato attuale del referente (job change monitoring)
+# ----------------------------------------------------------------------------
+
+def verify_person(person_id: str | None = None,
+                  linkedin_url: str | None = None,
+                  email: str | None = None,
+                  full_name: str | None = None,
+                  domain: str | None = None) -> dict | None:
+    """Stato attuale di una persona secondo il provider configurato.
+
+    Ritorna dict {person_id, full_name, current_title, current_company,
+    current_domain, email, email_status} oppure None se il provider non
+    supporta la verifica / non configurato / persona non trovata.
+    Solo Apollo implementato (people/match): un credito per chiamata.
+    """
+    provider = _provider()
+    key = _api_key(provider)
+    if provider != "apollo" or not key:
+        return None
+    details = {}
+    if person_id:
+        details["id"] = person_id
+    if linkedin_url:
+        details["linkedin_url"] = linkedin_url
+    if email:
+        details["email"] = email
+    if full_name and domain:
+        details["name"] = full_name
+        details["organization_domain"] = domain
+    if not details:
+        return None
+    try:
+        r = requests.post(
+            _APOLLO_MATCH_URL,
+            headers={"Cache-Control": "no-cache",
+                     "Content-Type": "application/json",
+                     "x-api-key": key},
+            json=details, timeout=_TIMEOUT)
+        if r.status_code >= 400:
+            db.log_error("contacts", target="apollo_match",
+                         error_type="http_error",
+                         message=f"HTTP {r.status_code}: {r.text[:200]}")
+            return None
+        p = (r.json() or {}).get("person") or {}
+        if not p:
+            return None
+        org = p.get("organization") or {}
+        return {
+            "person_id": p.get("id") or person_id or "",
+            "full_name": p.get("name") or full_name or "",
+            "current_title": p.get("title") or "",
+            "current_company": org.get("name") or "",
+            "current_domain": (org.get("primary_domain")
+                               or org.get("website_url") or ""),
+            "email": p.get("email") or "",
+            "email_status": (p.get("email_status") or "").lower(),
+        }
+    except requests.RequestException as exc:
+        db.log_error("contacts", target="apollo_match",
+                     error_type=type(exc).__name__, message=str(exc))
+        return None

@@ -17,6 +17,34 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from privacy_masker import PrivacyMasker
+from config import AZIENDA
+
+
+# Motore di calcolo matematico: gira 100% in locale.
+# Il generatore di insight/testi (generate_retention_insight) passa
+# obbligatoriamente da PrivacyMasker prima di qualsiasi chiamata a llm.py.
+
+
+def masked_client_context(row: dict) -> str:
+    """Frammento di contesto anonimizzato per un cliente ERP.
+
+    Contiene SOLO dati non identificativi: fascia fatturato, mesi relativi,
+    famiglie prodotto. Nessuna ragione sociale, importo o data esatta."""
+    m = PrivacyMasker
+    tier = m.revenue_tier(row.get("total_revenue"))
+    last = m.months_ago(row.get("days_since_last"))
+    mtbo = m.mtbo_label(row.get("mtbo_days"))
+    ratio = row.get("delay_ratio") or "n/d"
+    cats = row.get("categories") or "N/D"
+    return (
+        f"Fascia fatturato storico: {tier}. "
+        f"Ordini storici: {row.get('total_orders', 'n/d')}. "
+        f"Ciclo medio riordino (MTBO): {mtbo}. "
+        f"Ultimo ordine: {last} (indice ritardo {ratio}x). "
+        f"Famiglie prodotto acquistate: {cats}."
+    )
+
 
 def calculate_customer_periodicity(df_orders: pd.DataFrame, reference_date: Optional[datetime] = None) -> pd.DataFrame:
     """Calcola la scheda di periodicita' e stato per ogni cliente.
@@ -475,16 +503,22 @@ def analyze_crm_orders(df_orders: pd.DataFrame) -> list[dict]:
                 "country": row["country"],
                 "client_id": row["client_id"],
                 "client_name": row["client_name"],
+                # Nome cliente replicato in target_company: serve alla
+                # pipeline per tokenizzare titolo/testo prima delle
+                # chiamate LLM cloud.
+                "target_company": row["client_name"],
                 "total_revenue": row["total_revenue"],
                 "mtbo_days": row["mtbo_days"],
                 "days_since_last": row["days_since_last"],
                 "delay_ratio": row["delay_ratio"],
+                # Testo gia' anonimizzato (Data Masking Policy): tier
+                # fatturato, mesi relativi, famiglie prodotto. La ragione
+                # sociale resta nei campi strutturati locali, non nel
+                # payload LLM.
                 "text": (
-                    f"Cliente: {row['client_name']} ({row['country']}). "
-                    f"Fatturato storico: €{row['total_revenue']:,.2f} su {row['total_orders']} ordini. "
-                    f"Ciclo medio riordino (MTBO): {row['mtbo_days']} giorni. "
-                    f"Ultimo ordine: {row['last_order']} ({row['days_since_last']} giorni fa, indice ritardo {row['delay_ratio']}x). "
-                    f"Categorie acquistate: {row['categories']}."
+                    f"Cliente B2B del produttore di cavi speciali "
+                    f"(paese {row['country']}). "
+                    + masked_client_context(row)
                 ),
                 "recommended_action": row["recommended_action"],
                 "cross_sell": row["cross_sell_opportunity"],
@@ -492,6 +526,86 @@ def analyze_crm_orders(df_orders: pd.DataFrame) -> list[dict]:
             })
 
     return opportunities
+
+
+RETENTION_SYSTEM_PROMPT = f"""Sei il Senior Customer Success Manager di un produttore europeo di cavi speciali in fibra ottica e rame.
+{AZIENDA}
+
+Riceverai il profilo ANONIMIZZATO di un cliente: token al posto della ragione sociale, fascia di fatturato (Tier), mesi relativi al posto delle date, famiglie tecniche al posto dei codici articolo.
+Usa SEMPRE i token e le fasce ricevuti: non inventare nomi, importi o date.
+
+Rispondi ESCLUSIVAMENTE con un JSON valido:
+{{
+  "insight": "<analisi dello stato del rapporto e delle cause probabili del ritardo/churn>",
+  "next_best_action": "<azione commerciale concreta prioritaria>",
+  "cross_sell_pitch": "<gancio tecnico-commerciale sulla famiglia mai acquistata>",
+  "email_subject": "<oggetto email di ricontatto>",
+  "email_body": "<bozza email formale: usa i token ricevuti per nomi e referente>"
+}}
+"""
+
+
+def generate_retention_insight(client: dict,
+                               tech_profile: dict | None = None,
+                               referente_role: str = "Responsabile Acquisti",
+                               provider: str | None = None,
+                               masker: PrivacyMasker | None = None) -> dict:
+    """Genera insight + bozza email di rientro per un cliente ERP via LLM.
+
+    UNICO punto in cui i dati CRM raggiungono llm.py: il prompt contiene
+    solo token/fasce (masked_client_context) e la risposta viene
+    re-idratata localmente prima di essere restituita.
+
+    client: riga df_periodicity convertita in dict (client_name,
+        client_id, total_revenue, status, categories, ...).
+    tech_profile: output opzionale di analyze_client_technical_profile
+        (famiglie/standard tecnici gia' non identificativi).
+    """
+    from llm import generate_json_completion, is_llm_available
+
+    masker = masker or PrivacyMasker()
+    client_tok = masker.mask_entity(client.get("client_name"), "CLIENTE")
+    ref_tok = masker.mask_entity(
+        f"{referente_role} {client.get('client_name','')}".strip(),
+        "REFERENTE") if referente_role else ""
+
+    famiglie = client.get("categories") or "N/D"
+    mai_acquistato = []
+    for fam in ("Fibra Ottica", "Rame", "Accessori"):
+        if fam.lower() not in famiglie.lower() and fam != "Accessori":
+            mai_acquistato.append(fam)
+
+    prompt = (
+        f"Analizza {client_tok} (Paese: {client.get('country', 'n/d')}, "
+        f"Stato retention: {client.get('status', 'n/d')}).\n"
+        f"{masked_client_context(client)}\n"
+        f"Mai acquistato (cross-sell): {', '.join(mai_acquistato) or 'nessuna gap evidente'}.\n"
+    )
+    if tech_profile and tech_profile.get("has_data"):
+        prompt += (
+            f"Profilo tecnico storico: {', '.join(tech_profile.get('standards', []))}; "
+            f"{', '.join(tech_profile.get('structures', []))}.\n"
+            f"Top famiglie: {', '.join(d for d, *_ in [t.get('description','') for t in tech_profile.get('top_products',[])][:3])}.\n"
+        )
+    if ref_tok:
+        prompt += f"Destinatario della comunicazione: {ref_tok} (ruolo: {referente_role}).\n"
+
+    if not is_llm_available(provider):
+        return {"generated_by": "fallback",
+                "insight": client.get("recommended_action", ""),
+                "email_subject": "", "email_body": ""}
+
+    data, used = generate_json_completion(
+        RETENTION_SYSTEM_PROMPT, prompt,
+        provider=provider, sensitive_guard=True)
+    if not data:
+        return {"generated_by": "fallback",
+                "insight": client.get("recommended_action", ""),
+                "email_subject": "", "email_body": ""}
+
+    data = masker.unmask_result(data)   # re-idratazione solo locale
+    data["generated_by"] = used
+    return data
 
 
 def check_pipeline_health(df_deals: pd.DataFrame) -> list[dict]:

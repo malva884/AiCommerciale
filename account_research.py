@@ -3,6 +3,7 @@ import json
 import re
 from config import AZIENDA
 from llm import generate_json_completion, is_llm_available
+from privacy_masker import PrivacyMasker, scrub_text
 
 DOSSIER_SYSTEM_PROMPT = f"""Sei il Senior Sales Intelligence Specialist per un produttore di cavi speciali (Fibra & Rame).
 {AZIENDA}
@@ -31,12 +32,22 @@ def generate_account_dossier(company_name: str, country: str = "Europa", notes: 
                              provider: str | None = None) -> dict:
     """Genera il dossier account strategico per il commerciale."""
     if is_llm_available(provider) and company_name.strip():
+        # Data masking: il nome azienda esce come token effimero; le note
+        # utente (possono contenere email/telefoni/importi) vengono ripulite.
+        masker = PrivacyMasker()
+        company_tok = masker.mask_entity(company_name, "CLIENTE")
         data, used_p = generate_json_completion(
             DOSSIER_SYSTEM_PROMPT,
-            f"AZIENDA TARGET: {company_name}\nPAESE: {country}\nNOTE/CONTESTO: {notes}",
-            provider=provider
+            f"AZIENDA TARGET: {company_tok}\n"
+            f"PAESE: {country}\n"
+            f"NOTE/CONTESTO: {scrub_text(notes)}\n"
+            f"IMPORTANTE: nel campo company_name usa il segnaposto "
+            f"{company_tok} e citalo cosi' nei testi.",
+            provider=provider,
+            sensitive_guard=True
         )
         if data:
+            data = masker.unmask_result(data)  # re-idratazione solo locale
             data["generated_by"] = used_p
             return data
 

@@ -6,3 +6,4 @@ python-dateutil>=2.9.0
 schedule>=1.2.0
 pyodbc>=5.0.0
 sqlalchemy>=2.0.0
+trafilatura>=1.6.0

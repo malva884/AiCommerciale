@@ -12,9 +12,15 @@ import pandas as pd
 import requests
 import streamlit as st
 
+import company_intelligence
+import contact_enrichment
 import contact_finder
+import contact_monitor
 import config
 import db
+import news_intelligence
+import notifier
+import oem_tier_radar
 import ui_style
 from account_research import generate_account_dossier
 from company_enrich import enrich_company, format_amount
@@ -24,6 +30,7 @@ from crm_analyzer import (
     analyze_client_technical_profile,
     calculate_customer_periodicity,
     check_pipeline_health,
+    generate_retention_insight,
     get_suggested_cable_solution,
     match_company_with_erp_clients,
 )
@@ -49,7 +56,7 @@ from rfp_analyzer import analyze_rfp
 import sqlserver_orders as sso
 
 st.set_page_config(
-    page_title="Co-Pilota Commerciale AI - Cavi Speciali",
+    page_title="MB Sales Metriks",
     layout="wide",
     page_icon="⚡",
 )
@@ -77,11 +84,16 @@ _SECTIONS = [
     "👥  Opportunità & News",
     "📄  Documenti & Capitolati",
     "📋  Account Dossier",
+    "🏢  Company Intelligence",
     "🔗  Processi & CRM",
     "📊  Analisi & New Business",
     "✨  AI & Agenti",
 ]
 st.session_state.setdefault("nav_section", _SECTIONS[0])
+# Deep-link dai digest email (?opp_id=<id>): atterra direttamente sulla
+# pagina Opportunita' invece che sulla Panoramica.
+if st.query_params.get("opp_id"):
+    st.session_state["nav_section"] = _SECTIONS[1]
 ui_style.brand()
 st.sidebar.caption("NAVIGAZIONE")
 section = st.sidebar.radio("Sezioni", _SECTIONS, key="nav_section",
@@ -124,6 +136,17 @@ def _persist_contact_settings():
                    st.session_state.get("apollo_api_key_ui", "").strip())
     db.set_setting("PROXYCURL_API_KEY",
                    st.session_state.get("proxycurl_api_key_ui", "").strip())
+
+
+def _persist_search_settings():
+    """on_change dei widget Search API (Company Intelligence): salva
+    provider e chiavi nella tabella app_settings."""
+    db.set_setting("SEARCH_PROVIDER",
+                   st.session_state.get("search_provider_sel", "tavily"))
+    db.set_setting("TAVILY_API_KEY",
+                   st.session_state.get("tavily_api_key_ui", "").strip())
+    db.set_setting("SERPER_API_KEY",
+                   st.session_state.get("serper_api_key_ui", "").strip())
 
 
 def _contact_line(c: dict) -> str:
@@ -204,6 +227,17 @@ st.session_state.setdefault(
     "proxycurl_api_key_ui",
     db.get_setting("PROXYCURL_API_KEY")
     or os.environ.get("PROXYCURL_API_KEY", ""))
+st.session_state.setdefault(
+    "search_provider_sel",
+    db.get_setting("SEARCH_PROVIDER") or "tavily")
+st.session_state.setdefault(
+    "tavily_api_key_ui",
+    db.get_setting("TAVILY_API_KEY")
+    or os.environ.get("TAVILY_API_KEY", ""))
+st.session_state.setdefault(
+    "serper_api_key_ui",
+    db.get_setting("SERPER_API_KEY")
+    or os.environ.get("SERPER_API_KEY", ""))
 set_ollama_fallback(not st.session_state["no_ollama_fallback"])
 
 selected_llm_label = st.session_state["provider_radio"]
@@ -231,9 +265,10 @@ _SECTION_META = {
     _SECTIONS[1]: ("Opportunità & Tender Intelligence", "News RSS e gare europee TED scorate dall'AI"),
     _SECTIONS[2]: ("Documenti & Capitolati (RFP)", "Estrazione requisiti, normative EN/CPR e strategia d'offerta"),
     _SECTIONS[3]: ("Account Research & Dossier Pre-Meeting", "Sintesi strategica, buyer persona e leve commerciali"),
-    _SECTIONS[4]: ("Processi, CRM & Retention Ordini", "Analisi periodicità ordini (MTBO), churn e cross-selling ERP"),
-    _SECTIONS[5]: ("Analisi & New Business Europa", "Clienti gemelli europei e outreach multilingua AI"),
-    _SECTIONS[6]: ("AI & Agenti", "Motore LLM, quota API, monitor pipeline in tempo reale e log"),
+    _SECTIONS[4]: ("Company Intelligence 360°", "Dossier aziendali multi-fonte, decision maker e job change monitoring"),
+    _SECTIONS[5]: ("Processi, CRM & Retention Ordini", "Analisi periodicità ordini (MTBO), churn e cross-selling ERP"),
+    _SECTIONS[6]: ("Analisi & New Business Europa", "Clienti gemelli europei e outreach multilingua AI"),
+    _SECTIONS[7]: ("AI & Agenti", "Motore LLM, quota API, monitor pipeline in tempo reale e log"),
 }
 _p_title, _p_sub = _SECTION_META.get(section, (section, "Attività operative"))
 ui_style.page_header(_p_title, _p_sub, date_tag="Novembre 2026")
@@ -364,7 +399,7 @@ if section == _SECTIONS[0]:
 
     with col_agent:
         # --- Dati reali per il triage del Sales Agent ---
-        _n_unscored = _stats["total"] - _stats["scored"]
+        _n_unscored = db.pending_scoring_count()
         _n_err_agent = db.unresolved_error_count()
         with sqlite3.connect(DB_PATH) as conn:
             _top_opp = conn.execute(
@@ -429,18 +464,18 @@ if section == _SECTIONS[0]:
         if _n_err_agent > 0 and not _pipe_running:
             st.button(f"⚠️ {_n_err_agent} errori fonti da verificare",
                       width="stretch",
-                      on_click=_goto, args=(_SECTIONS[6],))
+                      on_click=_goto, args=(_SECTIONS[7],))
 
         st.button("📄 Analizza Capitolato RFP", width="stretch",
                   on_click=_goto, args=(_SECTIONS[2],))
         st.button("✉️ Genera Outreach AI", width="stretch",
-                  on_click=_goto, args=(_SECTIONS[5],))
+                  on_click=_goto, args=(_SECTIONS[6],))
 
 
 # ==============================================================================
 # SEZIONE ADMIN - MOTORE AI (widget config; lo stato arriva da session_state)
 # ==============================================================================
-if section == _SECTIONS[6]:
+if section == _SECTIONS[7]:
     st.subheader("🧠 Motore AI (LLM)")
     st.radio(
         "Provider attivo:",
@@ -539,6 +574,164 @@ if section == _SECTIONS[6]:
                 "link di ricerca manuale su LinkedIn.")
 
     st.divider()
+    st.subheader("🔎 Search API (Company Intelligence 360°)")
+    st.caption("Motore di ricerca web per il dossier on-demand: news, progetti, "
+               "dati societari e discovery del dominio aziendale.")
+    st.selectbox(
+        "Provider search:",
+        ["tavily", "serper"],
+        format_func=lambda k: {"tavily": "Tavily (tavily.com)",
+                               "serper": "Serper.dev (Google)"}[k],
+        key="search_provider_sel",
+        on_change=_persist_search_settings,
+    )
+    _sk1, _sk2 = st.columns(2)
+    _sk1.text_input(
+        "Tavily API Key",
+        type="password",
+        key="tavily_api_key_ui",
+        on_change=_persist_search_settings,
+        help="Chiave API Tavily (piano free: 1000 crediti/mese).",
+    )
+    _sk2.text_input(
+        "Serper API Key",
+        type="password",
+        key="serper_api_key_ui",
+        on_change=_persist_search_settings,
+        help="Chiave API Serper.dev (Google Search API).",
+    )
+    if company_intelligence.search_api_configured():
+        st.success("🟢 Search API attiva — dossier con fonti web esterne")
+    else:
+        st.info("⚪ Nessuna Search API: il dossier usera' solo sito aziendale, "
+                "TED ed ERP (discovery dominio disabilitata).")
+
+    st.divider()
+
+    # ------------------------------------------------------------------
+    # NOTIFICHE EMAIL & ROUTING CATEGORIE
+    # ------------------------------------------------------------------
+    st.subheader("✉️ Notifiche Email & Routing Categorie")
+    st.caption(f"Digest automatico Lun-Ven ore {config.MORNING_REPORT_TIME}: "
+               "le opportunita' COMPLETED vengono instradate per "
+               "Settore x Area Geografica e raggruppate per categoria "
+               "nell'email (mai rinviate due volte).")
+
+    with st.form("smtp_settings_form"):
+        _s1, _s2 = st.columns(2)
+        _s1.text_input("SMTP Host",
+                       value=db.get_setting("SMTP_HOST") or config.SMTP_HOST,
+                       key="smtp_host_in")
+        _s2.number_input("Porta", min_value=1, max_value=65535,
+                         value=int(db.get_setting("SMTP_PORT")
+                                   or config.SMTP_PORT),
+                         key="smtp_port_in")
+        _s1.text_input("Mittente (From)",
+                       value=(db.get_setting("SMTP_SENDER")
+                              or config.SMTP_SENDER),
+                       key="smtp_sender_in")
+        _s2.text_input("URL Dashboard (link nelle email)",
+                       value=(db.get_setting("DASHBOARD_BASE_URL")
+                              or config.DASHBOARD_BASE_URL),
+                       key="dash_url_in")
+        _s1.text_input("Utente SMTP",
+                       value=db.get_setting("SMTP_USER") or config.SMTP_USER,
+                       key="smtp_user_in")
+        _s2.text_input("Password SMTP (vuoto = invariata)",
+                       type="password", key="smtp_pwd_in")
+        _c_t1, _c_t2 = st.columns(2)
+        _tls = _c_t1.checkbox("STARTTLS (porta 587/25)", key="smtp_tls_in",
+                              value=(db.get_setting("SMTP_USE_TLS") or
+                                     ("1" if config.SMTP_USE_TLS else "0")) != "0")
+        _ssl = _c_t2.checkbox("SSL implicito (porta 465)", key="smtp_ssl_in",
+                              value=(db.get_setting("SMTP_USE_SSL") == "1"
+                                     or int(db.get_setting("SMTP_PORT")
+                                            or config.SMTP_PORT) == 465),
+                              help="Gmail/O365 su 465: SSL diretto. "
+                                   "Su 587: lascia attivo STARTTLS.")
+        if st.form_submit_button("💾 Salva Configurazione SMTP"):
+            db.set_setting("SMTP_HOST", st.session_state["smtp_host_in"].strip())
+            db.set_setting("SMTP_PORT", str(int(st.session_state["smtp_port_in"])))
+            db.set_setting("SMTP_SENDER", st.session_state["smtp_sender_in"].strip())
+            db.set_setting("SMTP_USER", st.session_state["smtp_user_in"].strip())
+            if st.session_state["smtp_pwd_in"]:
+                db.set_setting("SMTP_PASSWORD", st.session_state["smtp_pwd_in"])
+            db.set_setting("SMTP_USE_TLS", "1" if _tls else "0")
+            db.set_setting("SMTP_USE_SSL", "1" if _ssl else "0")
+            db.set_setting("DASHBOARD_BASE_URL",
+                           st.session_state["dash_url_in"].strip())
+            st.success("Configurazione SMTP salvata.")
+            st.rerun()
+
+    st.markdown("**📋 Regole di Routing Destinatari**")
+    st.caption("'*' = tutte le aree o tutti i settori. 'Altro' non viene "
+               "mai notificato. Le allerte ERP seguono aree e score.")
+    _rules_df = pd.DataFrame(db.get_notification_rules())
+    for _c, _dv in {"id": "", "active": True, "recipient_name": "",
+                    "recipient_email": "", "sectors": [], "areas": ["*"],
+                    "min_score": 80, "max_items_per_sector": 3,
+                    "include_crm_alerts": True}.items():
+        if _c not in _rules_df.columns:
+            _rules_df[_c] = _dv
+    _edited_rules = st.data_editor(
+        _rules_df[["id", "active", "recipient_name", "recipient_email",
+                   "sectors", "areas", "min_score", "max_items_per_sector",
+                   "include_crm_alerts"]],
+        num_rows="dynamic", use_container_width=True,
+        column_config={
+            "active": st.column_config.CheckboxColumn("Attiva"),
+            "sectors": st.column_config.ListColumn("Settori"),
+            "areas": st.column_config.ListColumn("Aree"),
+            "min_score": st.column_config.NumberColumn("Score min", min_value=0, max_value=100),
+            "max_items_per_sector": st.column_config.NumberColumn("Max/cat", min_value=1, max_value=20),
+            "include_crm_alerts": st.column_config.CheckboxColumn("Allerte ERP"),
+        },
+        key="routing_rules_editor",
+    )
+    if st.button("💾 Salva Regole di Routing", key="save_routing_btn"):
+        _clean = []
+        for i, r in enumerate(_edited_rules.to_dict("records"), 1):
+            if not str(r.get("recipient_email") or "").strip():
+                continue  # riga senza destinatario: scartata
+            _clean.append({
+                "id": str(r.get("id") or f"rule_{i}").strip(),
+                "active": bool(r.get("active")),
+                "recipient_name": str(r.get("recipient_name") or "").strip(),
+                "recipient_email": str(r["recipient_email"]).strip(),
+                "sectors": [s for s in (r.get("sectors") or []) if s] or ["*"],
+                "areas": [s for s in (r.get("areas") or []) if s] or ["*"],
+                "min_score": int(r.get("min_score") or 80),
+                "max_items_per_sector": int(r.get("max_items_per_sector") or 3),
+                "include_crm_alerts": bool(r.get("include_crm_alerts")),
+            })
+        db.set_notification_rules(_clean)
+        st.success(f"{len(_clean)} regole di routing salvate.")
+
+    _t1, _t2 = st.columns([2, 1])
+    _test_addr = _t1.text_input("Indirizzo per email di test",
+                                placeholder="nome.cognome@azienda.it",
+                                key="digest_test_addr")
+    if _t2.button("📨 Invia Email di Test ora", key="digest_test_btn",
+                  use_container_width=True):
+        if not _test_addr.strip():
+            st.warning("Inserisci un indirizzo email di test.")
+        else:
+            with st.spinner("Invio digest di prova (dry-run: nessun record "
+                            "marcato come notificato)..."):
+                _rep = notifier.send_daily_digests(
+                    dry_run=True, test_recipient=_test_addr.strip())
+            for _r in _rep:
+                if _r["status"] == "SENT":
+                    st.success(f"✅ {_r['rule']} -> {_r['recipient']}: "
+                               f"{_r['items']} schede (test, DB non toccato)")
+                elif _r["status"] == "SKIPPED_EMPTY":
+                    st.info(f"⚪ {_r['rule']} -> {_r['recipient']}: "
+                            "nessuna opportunita' (email non inviata)")
+                else:
+                    st.error(f"❌ {_r['rule']} -> {_r['recipient']}: "
+                             f"{_r['status']} {_r.get('error') or ''}")
+
+    st.divider()
 
 
 def _company_brief(info: dict) -> str:
@@ -574,8 +767,10 @@ if section == _SECTIONS[1]:
             df = pd.read_sql_query(
                 """SELECT id, source, title, url, published, text, country,
                           area_manager, score, sector, target_company, norms,
-                          motivation, action, email_draft, scored_by, created_at
-                   FROM opportunities""",
+                          motivation, action, email_draft, scored_by,
+                          work_status, created_at
+                   FROM opportunities
+                   WHERE scoring_status = 'COMPLETED'""",
                 conn,
             )
         pub = pd.to_datetime(
@@ -588,6 +783,10 @@ if section == _SECTIONS[1]:
                 df.loc[nat, "published"].str[:10], errors="coerce", utc=True
             )
         df["_pub_dt"] = pub
+        # Verticali canonici: accorpa etichette legacy (es. Navale ->
+        # Navale/Offshore) per filtri e raggruppamenti coerenti.
+        df["sector"] = df["sector"].map(
+            lambda s: config.SECTOR_NORMALIZATION.get(s, s))
         return df.sort_values(
             ["_pub_dt", "score", "id"],
             ascending=[False, False, False],
@@ -615,6 +814,9 @@ if section == _SECTIONS[1]:
         available_sources = ["TUTTE"] + sorted(df_all["source"].unique().tolist())
         selected_source = st.sidebar.selectbox("Fonte Dati", available_sources)
 
+        work_statuses = ["TUTTI", "Da lavorare", "In trattativa", "Scartata"]
+        selected_work = st.sidebar.selectbox("Stato Lavorazione", work_statuses)
+
         search_kw = st.sidebar.text_input("Cerca parola chiave / Normativa (es. CPR, EN 45545, Alstom)", "")
 
         filtered_df = df_all[df_all["score"].fillna(0) >= min_score].copy()
@@ -625,6 +827,9 @@ if section == _SECTIONS[1]:
             filtered_df = filtered_df[filtered_df["sector"] == selected_sector]
         if selected_source != "TUTTE":
             filtered_df = filtered_df[filtered_df["source"] == selected_source]
+        if selected_work != "TUTTI":
+            filtered_df = filtered_df[
+                filtered_df["work_status"].fillna("Da lavorare") == selected_work]
         if search_kw:
             kw = re.escape(search_kw.lower())
             mask = (
@@ -634,6 +839,15 @@ if section == _SECTIONS[1]:
                 filtered_df["target_company"].str.lower().str.contains(kw, na=False)
             )
             filtered_df = filtered_df[mask]
+
+        # Deep-link dai digest email: ?opp_id=<id> mostra solo la scheda,
+        # scavalcando i filtri sidebar (score minimo, area, stato) che
+        # potrebbero nasconderla.
+        _qp_opp = str(st.query_params.get("opp_id", "") or "")
+        if _qp_opp.isdigit():
+            filtered_df = df_all[df_all["id"] == int(_qp_opp)]
+            st.info(f"🔗 Vista diretta: opportunita' #{_qp_opp} "
+                    "(aperta dal link nell'email digest).")
 
         kpi1, kpi2, kpi3, kpi4 = st.columns(4)
         kpi1.metric("Opportunita' Totali", len(df_all))
@@ -736,6 +950,27 @@ if section == _SECTIONS[1]:
                     st.markdown("---")
                     st.markdown("✉️ **Bozza Comunicazione per il Commerciale:**")
                     st.text_area("Bozza", row["email_draft"], height=100, key=f"tab1_email_{row['id']}")
+
+                st.markdown("---")
+                # Stato lavorazione commerciale: i due pulsanti feedback
+                # alimentano il filtro 'Stato Lavorazione' della sidebar.
+                cur_work = row["work_status"] if pd.notnull(row["work_status"]) else "Da lavorare"
+                _ws_icon = {"Da lavorare": "🟦", "In trattativa": "🟧",
+                            "Scartata": "⛔"}.get(cur_work, "🟦")
+                st.caption(f"Stato lavorazione: {_ws_icon} **{cur_work}**")
+                wb1, wb2, _ = st.columns([1, 1, 4])
+                if wb1.button("🤝 In trattativa", key=f"ws_deal_{row['id']}",
+                              disabled=cur_work == "In trattativa"):
+                    db.update_work_status(row["id"], "In trattativa")
+                    st.rerun()
+                if wb2.button("🗑️ Scartata", key=f"ws_drop_{row['id']}",
+                              disabled=cur_work == "Scartata"):
+                    db.update_work_status(row["id"], "Scartata")
+                    st.rerun()
+                if cur_work != "Da lavorare":
+                    if st.button("↩️ Riapri (Da lavorare)", key=f"ws_open_{row['id']}"):
+                        db.update_work_status(row["id"], "Da lavorare")
+                        st.rerun()
 
                 st.markdown("---")
                 with st.form(key=f"edit_class_{row['id']}"):
@@ -867,9 +1102,389 @@ if section == _SECTIONS[3]:
         st.text_area("Email", dossier.get("tailored_outreach_email", ""), height=150)
 
 # ==============================================================================
-# TAB 4: CRM & PIPELINE HEALTH CHECK
+# TAB 4: COMPANY INTELLIGENCE 360 (Dossier multi-fonte + Contact Monitoring)
 # ==============================================================================
 if section == _SECTIONS[4]:
+    st.subheader("🏢 Company Intelligence 360°")
+    st.caption("Dossier aziendale multi-fonte (sito web, Search API, TED, ERP), "
+               "estrazione decision maker e monitoraggio automatico dei cambi "
+               "di ruolo/azienda.")
+
+    ci_t1, ci_t2, ci_t3, ci_t4 = st.tabs([
+        "🔍 Nuova Analisi",
+        "📁 Dossier & Decision Maker",
+        "🔔 Alert Job Change",
+        "🎯 OEM Radar & News"])
+
+    # ------------------------------------------------------------------
+    # SUB-TAB 1: analisi on-demand
+    # ------------------------------------------------------------------
+    with ci_t1:
+        _c1, _c2 = st.columns([3, 2])
+        _ci_name = _c1.text_input("Ragione sociale",
+                                  placeholder="Es. Stadler Rail AG",
+                                  key="ci_company_name")
+        _ci_site = _c2.text_input("Sito web (opzionale)",
+                                  placeholder="https://www.stadlerrail.com",
+                                  key="ci_website")
+
+        if st.button("🚀 Analizza Azienda", type="primary",
+                     disabled=not _ci_name.strip()):
+            with st.spinner("Raccolta multi-fonte in corso "
+                            "(web, Search API, TED, ERP)..."):
+                try:
+                    res = company_intelligence.profile_company_sync(
+                        _ci_name.strip(), _ci_site.strip() or None,
+                        provider=selected_provider)
+                    st.session_state["ci_last_result"] = res
+                except Exception as exc:
+                    st.error(f"Analisi fallita: {exc}")
+                    res = None
+            if res and res.get("company_id"):
+                st.success(f"Dossier salvato per **{res['company_name']}** "
+                           f"({res['domain']})")
+                # Enrichment decision maker automatico se provider configurato
+                if contact_finder.is_configured():
+                    with st.spinner("Ricerca e validazione GDPR dei "
+                                    "decision maker..."):
+                        new_c, cerr = contact_enrichment \
+                            .enrich_company_contacts(res["company_id"])
+                    if cerr:
+                        st.warning(f"Ricerca referenti: {cerr}")
+                    elif new_c:
+                        st.success(f"👥 {len(new_c)} decision maker verificati "
+                                   "salvati e messi in monitoraggio.")
+                    else:
+                        st.info("Nessun referente con email aziendale "
+                                "verificata sul dominio trovato.")
+                else:
+                    st.caption("Configura Apollo/Proxycurl in ✨ AI & Agenti "
+                               "per estrarre i decision maker.")
+            elif res:
+                st.warning("Analisi completata ma nessun dominio aziendale "
+                           "identificato: dossier non persistito. Inserisci "
+                           "il sito web aziendale oppure configura una "
+                           "Search API.")
+
+        res = st.session_state.get("ci_last_result")
+        if res and res.get("dossier"):
+            d = res["dossier"]
+            st.divider()
+            _m1, _m2, _m3, _m4 = st.columns(4)
+            _m1.metric("Settore", d.get("sector") or "—")
+            _m2.metric("Paese", d.get("country_code") or "—")
+            _m3.metric("Motore", str(d.get("_generated_by") or "—").upper())
+            _src = d.get("_sources") or {}
+            _m4.metric("Tempo", f"{_src.get('elapsed_sec', '?')}s")
+
+            if str(d.get("_generated_by") or "") == "heuristic":
+                st.warning("⚠️ Sintesi LLM non riuscita — dossier euristico "
+                           "parziale. Causa: "
+                           + (d.get("_llm_error") or "sconosciuta")
+                           + " Dettaglio anche in ✨ AI & Agenti → Log errori.")
+
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.markdown("#### 🏛️ Profilo Societario")
+                st.markdown(f"**{d.get('legal_name') or res['company_name']}**")
+                for lbl, key in [("Sede", "hq"),
+                                 ("Gruppo", "parent_group"),
+                                 ("Dimensione", "size_estimate"),
+                                 ("Fatturato", "revenue_estimate")]:
+                    if d.get(key):
+                        st.markdown(f"- **{lbl}:** {d[key]}")
+                if d.get("plants"):
+                    st.markdown("- **Stabilimenti:** "
+                                + ", ".join(d["plants"][:5]))
+                vc = d.get("value_chain_role") or {}
+                if vc.get("classification"):
+                    st.markdown(f"- **Ruolo filiera:** `{vc['classification']}`")
+                if vc.get("end_customers"):
+                    st.markdown("- **Clienti finali:** "
+                                + ", ".join(vc["end_customers"][:6]))
+
+            with col_b:
+                st.markdown("#### 🛠️ Fit Tecnico")
+                tf = d.get("technical_fit") or {}
+                certs = tf.get("certifications") or []
+                if certs:
+                    st.markdown("**Norme/Certificazioni:** "
+                                + " ".join(f"`{c}`" for c in certs))
+                cables = tf.get("recommended_mb_cables") or []
+                if cables:
+                    st.markdown("**Cavi MB consigliati:**")
+                    for cb in cables:
+                        st.markdown(f"- {cb}")
+
+            if d.get("sales_angle"):
+                st.markdown("#### 💡 Leva Commerciale (Sales Angle)")
+                st.info(d["sales_angle"])
+
+            signals = d.get("recent_signals") or []
+            if signals:
+                st.markdown("#### 📡 Segnali Recenti")
+                for s in signals[:10]:
+                    icon = {"ted_award": "🏛️", "news": "📰",
+                            "erp": "📦"}.get(s.get("type"), "•")
+                    url = s.get("source_url") or ""
+                    title = s.get("title") or ""
+                    date_ = s.get("date") or "n.d."
+                    line = (f"{icon} `{date_}` "
+                            f"[{title[:90]}]({url})" if url
+                            else f"{icon} `{date_}` {title[:90]}")
+                    st.markdown(line)
+
+            erp = d.get("_erp") or {}
+            if erp.get("is_customer"):
+                st.markdown("#### 📦 Storico ERP (cliente interno)")
+                rev = erp.get("revenue_last_3y_eur") or {}
+                _e1, _e2, _e3 = st.columns(3)
+                _e1.metric("Ordini totali", erp.get("orders_count", 0))
+                _e2.metric("Ultimo ordine",
+                           erp.get("last_order_date", "—"))
+                _e3.metric("Fatturato cumulato",
+                           f"€ {erp.get('total_revenue_eur', 0):,.0f}")
+                st.caption("Fatturato per anno: " + " · ".join(
+                    f"{y}: €{v:,.0f}" for y, v in sorted(rev.items(),
+                                                       reverse=True)))
+                if erp.get("cable_families_bought"):
+                    st.caption("Famiglie acquistate: "
+                               + ", ".join(erp["cable_families_bought"]))
+
+            # Decision maker salvati sul dossier (se presenti)
+            if res.get("company_id"):
+                _cnt = db.get_company_contacts(res["company_id"])
+                if _cnt:
+                    st.markdown("#### 👥 Decision Maker verificati")
+                    _dfc1 = pd.DataFrame(_cnt)[
+                        ["full_name", "job_title", "department", "email",
+                         "linkedin_url", "confidence_score"]]
+                    _dfc1.columns = ["Nome", "Ruolo", "Area", "Email",
+                                     "LinkedIn", "Conf."]
+                    st.dataframe(_dfc1, width="stretch", hide_index=True)
+
+    # ------------------------------------------------------------------
+    # SUB-TAB 2: dossier salvati + decision maker
+    # ------------------------------------------------------------------
+    with ci_t2:
+        dossiers = db.list_dossiers()
+        if not dossiers:
+            st.info("Nessun dossier salvato. Esegui un'analisi dalla tab "
+                    "'Nuova Analisi'.")
+        else:
+            _df_d = pd.DataFrame(dossiers)
+            _df_d.columns = ["ID", "Azienda", "Dominio", "Paese",
+                             "Settore", "Flag", "Aggiornato"]
+            st.dataframe(_df_d.drop(columns=["ID"]),
+                         width="stretch", hide_index=True)
+
+            sel = st.selectbox(
+                "Seleziona azienda:",
+                dossiers,
+                format_func=lambda x: f"{x['company_name']} ({x['domain']})"
+                + (" 🔥" if "WARM_CHAMPION_LEAD" in (x.get("flags") or "")
+                   else ""))
+            if sel:
+                cid = sel["company_id"]
+                contacts = db.get_company_contacts(cid)
+                if contacts:
+                    st.markdown(f"##### 👥 {len(contacts)} referenti monitorati")
+                    _dfc = pd.DataFrame(contacts)[
+                        ["full_name", "job_title", "department", "email",
+                         "email_status", "status", "confidence_score",
+                         "last_checked_at"]]
+                    _dfc.columns = ["Nome", "Ruolo", "Area", "Email",
+                                    "Email ✓", "Stato", "Conf.", "Ultimo check"]
+                    st.dataframe(_dfc, width="stretch", hide_index=True)
+
+                if contact_finder.is_configured():
+                    btn_lbl = ("🔄 Aggiorna decision maker" if contacts
+                               else "👥 Trova decision maker")
+                    if st.button(btn_lbl, key="ci_enrich"):
+                        with st.spinner("Ricerca e validazione GDPR dei "
+                                        "decision maker..."):
+                            new_c, err = contact_enrichment \
+                                .enrich_company_contacts(cid)
+                        if err:
+                            st.warning(f"Enrichment fallito: {err}")
+                        elif not new_c:
+                            st.info("Nessun contatto con email aziendale "
+                                    "verificata sul dominio trovato.")
+                        else:
+                            st.success(f"{len(new_c)} referenti validi "
+                                       "salvati e messi in monitoraggio.")
+                            st.rerun()
+                elif not contacts:
+                    st.caption("Configura Apollo/Proxycurl in ✨ AI & Agenti "
+                               "per estrarre i decision maker.")
+
+    # ------------------------------------------------------------------
+    # SUB-TAB 3: alert job change da rivedere
+    # ------------------------------------------------------------------
+    with ci_t3:
+        _p1, _p2 = st.columns([3, 1])
+        _p1.markdown(f"**{db.pending_events_count()} eventi da rivedere**")
+        if _p2.button("🔎 Verifica ora", key="ci_run_monitor"):
+            with st.spinner("Verifica stato referenti in corso..."):
+                rep = contact_monitor.run_monitor_batch(limit=50,
+                                                        verbose=False)
+            st.success(f"{rep['checked']} contatti verificati, "
+                       f"{len(rep['events'])} eventi generati.")
+            st.rerun()
+
+        events = db.pending_change_events()
+        if not events:
+            st.caption("Nessun alert pendente. Il monitoraggio automatico "
+                       "gira settimanalmente sullo scheduler.")
+        for ev in events:
+            icon = {"COMPANY_CHANGE": "🔀", "ROLE_PROMOTION": "📈",
+                    "EMAIL_BOUNCED": "✉️❌"}.get(ev["event_type"], "🔔")
+            with st.expander(
+                    f"{icon} {ev['full_name']} — {ev['event_type']} "
+                    f"({ev.get('company_name') or '?'}) · "
+                    f"{str(ev['created_at'])[:16]}"):
+                st.markdown(f"**Da:** {ev.get('old_value') or '—'}  \n"
+                            f"**A:** {ev.get('new_value') or '—'}")
+                try:
+                    payload = json.loads(
+                        ev.get("generated_action_payload") or "{}")
+                except Exception:
+                    payload = {}
+                if payload.get("congrats_email_draft"):
+                    st.markdown("**Bozza email congratulazioni:**")
+                    st.text_area("", payload["congrats_email_draft"],
+                                 height=140, key=f"ev_draft_{ev['event_id']}")
+                repl = payload.get("replacement_candidates") or []
+                if repl:
+                    st.markdown("**Sostituti candidati (backfill):**")
+                    for r in repl:
+                        st.markdown(f"- {r['full_name']} — {r['job_title']} "
+                                    f"({r['email']})")
+                st.button("✅ Segna gestito", key=f"ev_ok_{ev['event_id']}",
+                          on_click=db.mark_event_reviewed,
+                          args=([ev["event_id"]],))
+
+    # ------------------------------------------------------------------
+    # SUB-TAB 4: OEM RADAR & NEWS INTELLIGENCE (Doppio Binario)
+    # ------------------------------------------------------------------
+    with ci_t4:
+        _r1, _r2, _r3 = st.columns([2, 1, 1])
+        _r1.markdown(
+            f"**{db.oem_count()} OEM in watchlist** · "
+            f"**{db.new_alerts_count()} commesse da gestire**")
+        if _r2.button("📡 Scansiona OEM", key="ci_radar_run"):
+            if db.oem_count() == 0:
+                oem_tier_radar.seed_watchlist()
+            with st.spinner("Radar commesse madre in corso..."):
+                rep = oem_tier_radar.run_radar(days=30, verbose=False)
+            st.success(f"{rep['scanned']} OEM scansionati, "
+                       f"{rep['new_alerts']} nuovi alert.")
+            st.rerun()
+        if _r3.button("🧲 Tier 1/2 Discovery", key="ci_tier_run"):
+            if db.oem_count() == 0:
+                oem_tier_radar.seed_watchlist()
+            with st.spinner("Ricerca cablisti europei in corso..."):
+                rep = oem_tier_radar.discover_tier_suppliers(verbose=False)
+            if rep.get("error") == "search_api_missing":
+                st.warning("Configura una Search API in ✨ AI & Agenti "
+                           "per la discovery cablisti.")
+            else:
+                st.success(f"{rep['new_prospects']} nuovi prospect "
+                           f"TIER1_DISCOVERY ({rep['skipped_erp']} "
+                           "esclusi già clienti ERP).")
+            st.rerun()
+
+        alerts = db.list_contract_alerts(limit=50)
+        if alerts:
+            st.markdown("#### 🎯 Commesse Madre rilevate")
+            for a in alerts:
+                _icol = {"NEW": "🆕", "ASSIGNED": "📌",
+                         "DISMISSED": "🗑️"}.get(a["status"], "🔔")
+                with st.expander(
+                        f"{_icol} {a.get('oem_name') or '?'} — "
+                        f"{str(a['contract_summary'])[:70]}… · "
+                        f"{str(a['detected_at'])[:16]}"):
+                    st.markdown(
+                        f"**Sintesi:** {a['contract_summary']}  \n"
+                        f"**Settore:** {a.get('sector') or '—'} · "
+                        f"**Sito stimato:** {a.get('probable_site') or 'da verificare'}  \n"
+                        f"**Cavi MB:** "
+                        + ", ".join(a.get("suggested_mb_cables") or [])
+                        or "—")
+                    if a.get("source_url"):
+                        st.markdown(
+                            f"📰 [Fonte: {(a.get('source_title') or '')[:90]}]"
+                            f"({a['source_url']})")
+                    _b1, _b2 = st.columns(2)
+                    _b1.button("📌 Assegna a Key Account",
+                               key=f"al_a_{a['alert_id']}",
+                               on_click=db.set_alert_status,
+                               args=(a["alert_id"], "ASSIGNED"))
+                    _b2.button("🗑️ Ignora",
+                               key=f"al_d_{a['alert_id']}",
+                               on_click=db.set_alert_status,
+                               args=(a["alert_id"], "DISMISSED"))
+        else:
+            st.caption("Nessuna commessa madre ancora rilevata — "
+                       "il radar gira ogni giorno alle 05:00.")
+
+        with st.expander("📋 Watchlist OEM (colossi monitorati)"):
+            _oems = db.list_oems(active_only=True)
+            if not _oems:
+                if st.button("Carica watchlist iniziale (35 OEM)",
+                             key="ci_seed_oem"):
+                    n = oem_tier_radar.seed_watchlist()
+                    st.success(f"{n} OEM caricati.")
+                    st.rerun()
+            else:
+                _dfo = pd.DataFrame(_oems)[
+                    ["oem_name", "sector", "aliases",
+                     "production_sites", "last_scanned_at"]]
+                _dfo.columns = ["OEM", "Settore", "Alias",
+                                "Stabilimenti", "Ultimo scan"]
+                st.dataframe(_dfo, width="stretch", hide_index=True)
+
+        # Segnali news per i dossier salvati (ulteriori 90gg)
+        st.markdown("#### 📰 Segnali News recenti (prospect/dossier)")
+        _sel_d = st.selectbox(
+            "Azienda:",
+            db.list_dossiers(),
+            format_func=lambda x: x["company_name"],
+            key="ci_news_company") if db.list_dossiers() else None
+        if _sel_d:
+            sigs = db.get_news_signals(_sel_d["company_id"], days=90)
+            if not sigs:
+                st.caption("Nessun segnale <90gg. Il batch news gira "
+                           "la domenica alle 05:30, oppure:")
+                if st.button("🔎 Raccogli news ora", key="ci_news_run"):
+                    with st.spinner("Raccolta e classificazione news..."):
+                        r = news_intelligence.analyze_company_news(
+                            _sel_d["company_name"],
+                            country_code=_sel_d.get("country_code"),
+                            domain=_sel_d.get("domain"),
+                            company_id=_sel_d["company_id"],
+                            provider=selected_provider)
+                    st.success(f"{r['articles_found']} articoli, "
+                               f"{r['signals_saved']} segnali salvati. "
+                               f"Gancio: {r['outreach_hook'][:80]}…")
+                    st.rerun()
+            for s in sigs:
+                icon = {"NEW_CONTRACT": "📜", "FACILITY_EXPANSION": "🏭",
+                        "TRADE_SHOW": "🎪",
+                        "SUPPLY_CHAIN_EVENT": "🔗"}.get(
+                            s["signal_category"], "📰")
+                st.markdown(
+                    f"{icon} `{s.get('published_date') or 'n.d.'}` "
+                    f"**{s['signal_category']}** — "
+                    f"[{s['article_title'][:80]}]({s['source_url']})")
+                if s.get("outreach_hook"):
+                    st.caption(f"   🪝 {s['outreach_hook'][:180]}")
+
+
+# ==============================================================================
+# TAB 5: CRM & PIPELINE HEALTH CHECK
+# ==============================================================================
+if section == _SECTIONS[5]:
     st.subheader("📊 Analisi Periodicità Ordini (MTBO), Retention & Cross-Selling")
     st.caption("Connessione diretta a SQL Server ERP (`GP_NX_AGG`) per monitorare frequenza di riordino, churn e cross-sell.")
 
@@ -1028,6 +1643,29 @@ if section == _SECTIONS[4]:
                 if client_card["cross_sell_opportunity"]:
                     st.success(f"💡 **Cross-Selling:** {client_card['cross_sell_opportunity']}")
 
+                # Insight AI sul cliente: il prompt passa da PrivacyMasker
+                # (token/fasce, mai ragione sociale o importi esatti) e la
+                # risposta viene re-idratata in locale prima del display.
+                if st.button("✨ Genera Insight AI & Bozza Email di Rientro",
+                             key="retention_insight_btn"):
+                    with st.spinner(f"Analisi retention con AI ({selected_provider.upper()}) — dati anonimizzati in transito..."):
+                        _ins = generate_retention_insight(
+                            client_card.to_dict(), tech_profile,
+                            provider=selected_provider)
+                    if _ins.get("insight"):
+                        st.markdown(f"**🧠 Insight ({_ins.get('generated_by','')}):** {_ins['insight']}")
+                        if _ins.get("next_best_action"):
+                            st.markdown(f"**➡️ Next Best Action:** {_ins['next_best_action']}")
+                        if _ins.get("cross_sell_pitch"):
+                            st.markdown(f"**🎯 Cross-Sell Pitch:** {_ins['cross_sell_pitch']}")
+                        if _ins.get("email_body"):
+                            with st.expander("✉️ Bozza Email di Rientro", expanded=True):
+                                st.markdown(f"**Oggetto:** `{_ins.get('email_subject','')}`")
+                                st.text_area("Corpo (pronto da copiare):",
+                                             _ins["email_body"], height=220)
+                    else:
+                        st.warning("Nessun insight generato (LLM non disponibile).")
+
                 # ==============================================================
                 # PROFILO TECNICO CLIENTE (PUNTO 4: IDENTIKIT PRE-CALL)
                 # ==============================================================
@@ -1122,7 +1760,7 @@ if section == _SECTIONS[4]:
 # ==============================================================================
 # TAB 5: NEW BUSINESS, LOOKALIKE PROSPECTING & OUTREACH MULTILINGUA
 # ==============================================================================
-if section == _SECTIONS[5]:
+if section == _SECTIONS[6]:
     st.subheader("🚀 New Business, Clienti Gemelli Europa & Outreach AI")
     st.caption("Espansione del portafoglio: identifica aziende gemelle dei tuoi clienti top all'estero e genera comunicazioni su misura in 4 lingue.")
 
@@ -1288,6 +1926,18 @@ if section == _SECTIONS[5]:
                 _scraped = _prow["scraped_context"] if _prow and _prow["scraped_context"] else ""
                 _src = _prow["source_type"] if _prow else "MANUALE"
 
+                # Gancio News Intelligence (<90gg): hook + link articolo
+                _ck = news_intelligence.company_key_for(
+                    final_company_target,
+                    (_prow or {}).get("country_code"))
+                _hook = db.latest_outreach_hook(_ck)
+                _sig = db.latest_news_signal(_ck)
+                if _hook:
+                    st.info("📡 **Gancio news rilevato:** "
+                            + (_sig["article_title"][:100] if _sig else "")
+                            + (f" — [{_sig['signal_category']}]"
+                               f"({_sig['source_url']})" if _sig else ""))
+
                 with st.spinner(f"Elaborazione outreach personalizzato per {final_company_target}..."):
                     outreach_res = generate_multilingual_outreach(
                         company_name=final_company_target,
@@ -1300,6 +1950,7 @@ if section == _SECTIONS[5]:
                         scraped_context=_scraped,
                         source_type=_src,
                         area_manager=area_for_country(outreach_country),
+                        outreach_hook=_hook,
                     )
 
                 st.success(f"✅ Proposta commerciale generata per **{final_company_target}**!")
@@ -1336,7 +1987,7 @@ def _mask_secret(v: str | None) -> str:
 # ==============================================================================
 # TAB 6: AMMINISTRAZIONE, MONITOR & LOG
 # ==============================================================================
-if section == _SECTIONS[6]:
+if section == _SECTIONS[7]:
     # ------------------------------------------------------------------
     # CONFIGURAZIONE ATTIVA & QUOTA GEMINI
     # ------------------------------------------------------------------
@@ -1536,6 +2187,107 @@ if section == _SECTIONS[6]:
                          disabled=n_res == 0):
                 db.delete_resolved_errors()
                 st.rerun()
+
+    st.divider()
+
+    # ------------------------------------------------------------------
+    # CONTROLLO & MANUTENZIONE DB
+    # ------------------------------------------------------------------
+    st.subheader("🗄️ Controllo & Manutenzione DB")
+    st.caption("Stato delle code di scoring, azioni di manutenzione sicure e "
+               "ispezione read-only di `data/opportunita.db`.")
+
+    # A) Cruscotto stato code
+    _qs = db.queue_stats()
+    q1, q2, q3, q4 = st.columns(4)
+    q1.metric("⏳ PENDING (coda triage)", _qs.get("PENDING", 0))
+    q2.metric("🧪 BATCH_PASSED (coda deep-dive)", _qs.get("BATCH_PASSED", 0))
+    q3.metric("✅ COMPLETED (pronte)", _qs.get("COMPLETED", 0))
+    q4.metric("🚫 DISCARDED (scartati)", _qs.get("DISCARDED", 0))
+
+    # D) Backup scaricabile: punto di ripristino prima di azioni massive
+    try:
+        with open(DB_PATH, "rb") as _dbf:
+            _db_bytes = _dbf.read()
+        st.download_button(
+            f"💾 Scarica backup DB ({len(_db_bytes) / 1048576:.1f} MB)",
+            data=_db_bytes,
+            file_name=f"opportunita_{datetime.now().strftime('%Y%m%d_%H%M')}.db",
+            mime="application/octet-stream",
+            help="Copia integrale del file SQLite: punto di ripristino "
+                 "prima di operazioni massive.")
+    except OSError:
+        st.warning("File DB non leggibile: backup non disponibile.")
+
+    # B) Azioni rapide sicure (UPDATE/DELETE pre-approvate in db.py)
+    _MAINT = {
+        "discard_old": (
+            "🗓️ Scarta record obsoleti (Ante 2026)",
+            "I BATCH_PASSED con published precedente al 2026 diventano "
+            "DISCARDED: svuota la coda deep-dive e risparmia chiamate Gemini.",
+            db.discard_pre_2026_passed, "record scartati"),
+        "reset_heur": (
+            "🔁 Rimetti in coda Triage i record Euristica",
+            "I BATCH_PASSED promossi dall'euristica (fallback dopo errori "
+            "API) tornano PENDING e saranno rivalutati dal batching Gemini.",
+            db.reset_heuristic_passed, "record riportati in PENDING"),
+        "reset_fail": (
+            "🧯 Ricalcola record falliti / senza score",
+            "I record con score NULL o stato ERROR (es. dopo un timeout di "
+            "rete) tornano in PENDING.",
+            db.reset_failed_records, "record recuperati"),
+        "purge_err": (
+            "🧹 Pulisci log errori vecchi (> 30 giorni)",
+            "Elimina definitivamente le righe di fetch_errors piu' vecchie "
+            "di 30 giorni per alleggerire il file SQLite.",
+            db.purge_old_errors, "righe di log eliminate"),
+    }
+    b1, b2, b3, b4 = st.columns(4)
+    for _col, _key in ((b1, "discard_old"), (b2, "reset_heur"),
+                       (b3, "reset_fail"), (b4, "purge_err")):
+        if _col.button(_MAINT[_key][0], key=f"maint_{_key}",
+                       help=_MAINT[_key][1]):
+            st.session_state["maint_armed"] = _key
+
+    _armed = st.session_state.get("maint_armed")
+    if _armed:
+        _lbl, _help, _fn, _done = _MAINT[_armed]
+        st.warning(f"⚠️ Confermi l'operazione **{_lbl}**? {_help}")
+        cc1, cc2 = st.columns(2)
+        if cc1.button("✅ Conferma", key="maint_confirm"):
+            _n = _fn()
+            st.session_state.pop("maint_armed", None)
+            st.success(f"Fatto: {_n} {_done}.")
+            st.rerun()
+        if cc2.button("✖️ Annulla", key="maint_cancel"):
+            st.session_state.pop("maint_armed", None)
+            st.rerun()
+
+    # C) Console SQL in sola lettura
+    st.markdown("**🔎 Console SQL (sola lettura)**")
+    st.caption("Solo SELECT/PRAGMA: connessione `?mode=ro`, keyword di "
+               "modifica e multi-statement bloccati lato backend.")
+    _sql = st.text_area("Query", height=110, label_visibility="collapsed",
+                        placeholder=("SELECT source, COUNT(*) AS n "
+                                     "FROM opportunities GROUP BY source "
+                                     "ORDER BY n DESC"))
+    if st.button("▶️ Esegui Query di Lettura", key="ro_run"):
+        try:
+            st.session_state["ro_result"] = db.run_readonly_query(_sql)
+            st.session_state.pop("ro_error", None)
+        except (ValueError, Exception) as _e:  # noqa: BLE001
+            st.session_state["ro_error"] = str(_e)
+            st.session_state.pop("ro_result", None)
+
+    if st.session_state.get("ro_error"):
+        st.error(f"Query rifiutata: {st.session_state['ro_error']}")
+    _ro_df = st.session_state.get("ro_result")
+    if _ro_df is not None:
+        st.dataframe(_ro_df, width="stretch", hide_index=True)
+        st.download_button(
+            "⬇️ Esporta CSV",
+            _ro_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name="query_result.csv", mime="text/csv")
 
 
 # ==============================================================================

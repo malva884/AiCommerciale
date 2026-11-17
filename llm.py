@@ -16,11 +16,17 @@ import time
 import requests
 
 import db
-from config import (AZIENDA, COUNTRY_TO_AREA, DISABLE_OLLAMA_FALLBACK,
-                    GEMINI_API_KEY, GEMINI_API_KEYS, GEMINI_API_URL,
-                    GEMINI_DAILY_LIMIT, GEMINI_MIN_INTERVAL, GEMINI_MODEL,
-                    GEMINI_TIMEOUT, KEYWORD_SCORE, LLM_PROVIDER,
-                    OLLAMA_MODEL, OLLAMA_TIMEOUT, OLLAMA_URL)
+from privacy_masker import find_sensitive_patterns
+from config import (AZIENDA, BATCH_SNIPPET_MAX_CHARS, COMBO_ACTORS,
+                    COMBO_BONUS, COMBO_TRIGGERS, COUNTRY_TO_AREA,
+                    DISABLE_OLLAMA_FALLBACK, EU_PLAYER_GUARD, EXTRA_EU_PENALTY,
+                    EXTRA_EU_TERMS, GEMINI_API_KEY, GEMINI_API_KEYS,
+                    GEMINI_API_URL, GEMINI_BATCH_MODEL, GEMINI_DAILY_LIMIT,
+                    GEMINI_MIN_INTERVAL, GEMINI_MODEL, GEMINI_TIMEOUT,
+                    KEYWORD_SCORE, LLM_PROVIDER, NEGATIVE_KEYWORDS,
+                    OLLAMA_MODEL, OLLAMA_TIMEOUT, OLLAMA_URL,
+                    POSITIVE_KEYWORDS, SOURCE_BASE_SCORE,
+                    normalize_sector)
 
 # Runtime overrides (impostabili dinamicamente da UI Streamlit o da script)
 _RUNTIME_PROVIDER = None
@@ -87,7 +93,7 @@ REGOLA ASSOLUTA SUL RUMORE (SCORE = 0-15):
 Rispondi ESCLUSIVAMENTE con un oggetto JSON valido su una riga con questi campi:
 {{
   "score": <int 0-100>,
-  "sector": "<Data Center|Telecom/Provider|Ferroviario|Navale|Avio/Difesa|Altro>",
+  "sector": "<Data Center|Telecom/Provider|Ferroviario|Navale/Offshore|Avio/Difesa|Altro>",
   "target_company": "<nome dell'azienda/ente a cui vendere o proporre l'offerta (es. RFI, Marina Militare, Leonardo, Alstom, Sirti, Fincantieri, Webuild...), oppure null>",
   "country": "<codice ISO a 3 lettere es. ITA, DEU, FRA, ESP, GBR, SWE, POL, ecc., oppure null se ignoto>",
   "area_manager": "<DACH|IBERIA|FRANCE|ITALY|NORDICS|UK_IE|CEE|null>",
@@ -105,6 +111,7 @@ Criteri di scoring:
 """
 
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+_JSON_ARRAY_RE = re.compile(r"\[.*\]", re.DOTALL)
 
 # Prime contractor ed enti target diretti
 _KNOWN_PRIMES = {
@@ -222,19 +229,39 @@ def gemini_quota_exhausted() -> bool:
 def _call_gemini_json(system_prompt: str, user_prompt: str,
                       api_key: str | None = None,
                       model: str | None = None,
-                      timeout: int | None = None) -> dict | None:
+                      timeout: int | None = None,
+                      expect_array: bool = False,
+                      gen_config_extra: dict | None = None,
+                      sensitive_guard: bool = False) -> dict | list | None:
     """Chiamata REST a Google Gemini (Interactions API) con output JSON.
     Rotazione multi-chiave: 429 o budget esaurito su una chiave -> passa alla
-    successiva. Il conteggio quota e' per chiave (la quota e' per progetto)."""
+    successiva. Il conteggio quota e' per chiave (la quota e' per progetto).
+
+    sensitive_guard=True attiva il guardrail privacy: se il prompt contiene
+    P.IVA, importi esatti in valuta, email, IBAN o telefoni la chiamata
+    viene bloccata (None) e l'evento loggato, prima di qualsiasi HTTP."""
     global _LAST_GEMINI_CALL
+    if sensitive_guard:
+        leaks = find_sensitive_patterns(f"{system_prompt}\n{user_prompt}")
+        if leaks:
+            db.log_error("privacy_guard", target="gemini_prompt",
+                         error_type="blocked",
+                         message=("Chiamata Gemini bloccata: dati sensibili "
+                                  f"nel prompt ({', '.join(leaks)})"))
+            print(f"[llm] PRIVACY GUARD: prompt bloccato verso Gemini "
+                  f"-> {', '.join(leaks)}", flush=True)
+            return None
     mdl = model or _RUNTIME_GEMINI_MODEL or GEMINI_MODEL
     url = GEMINI_API_URL.format(model=mdl)  # no-op se l'URL non contiene {model}
+    gen_cfg = {
+        "thinking_level": "minimal",  # scoring JSON: niente reasoning esteso
+    }
+    if gen_config_extra:
+        gen_cfg.update(gen_config_extra)
     payload = {
         "model": mdl,
         "input": f"{system_prompt}\n\n{user_prompt}",
-        "generation_config": {
-            "thinking_level": "minimal",  # scoring JSON: niente reasoning esteso
-        },
+        "generation_config": gen_cfg,
     }
 
     for key in _gemini_keys(api_key):
@@ -274,7 +301,7 @@ def _call_gemini_json(system_prompt: str, user_prompt: str,
             if not raw_text:
                 print(f"[llm] Gemini: risposta senza testo: {str(data)[:300]}", flush=True)
                 return None
-            m = _JSON_RE.search(raw_text)
+            m = (_JSON_ARRAY_RE if expect_array else _JSON_RE).search(raw_text)
             return json.loads(m.group(0)) if m else json.loads(raw_text)
         except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as e:
             print(f"[llm] Gemini errore: {type(e).__name__}: {e}", flush=True)
@@ -284,26 +311,31 @@ def _call_gemini_json(system_prompt: str, user_prompt: str,
 
 def _call_ollama_json(system_prompt: str, user_prompt: str,
                       model: str | None = None,
-                      timeout: int | None = None) -> dict | None:
+                      timeout: int | None = None,
+                      expect_array: bool = False,
+                      temperature: float | None = None) -> dict | list | None:
     """Chiamata REST a Ollama locale con formato JSON."""
     mdl = model or _RUNTIME_OLLAMA_MODEL or OLLAMA_MODEL
+    req: dict = {
+        "model": mdl,
+        "stream": False,
+        "format": "json",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+    }
+    if temperature is not None:
+        req["options"] = {"temperature": temperature}
     try:
         resp = requests.post(
             OLLAMA_URL,
-            json={
-                "model": mdl,
-                "stream": False,
-                "format": "json",
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-            },
+            json=req,
             timeout=timeout or OLLAMA_TIMEOUT,
         )
         resp.raise_for_status()
         content = resp.json()["message"]["content"]
-        m = _JSON_RE.search(content)
+        m = (_JSON_ARRAY_RE if expect_array else _JSON_RE).search(content)
         return json.loads(m.group(0)) if m else json.loads(content)
     except (requests.RequestException, ValueError, KeyError, IndexError) as e:
         print(f"[llm] Ollama errore: {type(e).__name__}: {e}", flush=True)
@@ -317,16 +349,27 @@ def generate_json_completion(
     api_key: str | None = None,
     model: str | None = None,
     timeout: int | None = None,
-) -> tuple[dict | None, str]:
+    expect_array: bool = False,
+    gen_config_extra: dict | None = None,
+    temperature: float | None = None,
+    sensitive_guard: bool = False,
+) -> tuple[dict | list | None, str]:
     """Gateway unificato per chiamate LLM in formato JSON.
-    
+
     Ritorna una tupla (dati_json, provider_effettivo).
     Se il provider preferito fallisce, tenta automaticamente l'altro prima di arrendersi.
+    expect_array=True -> il payload atteso e' un array JSON (triage batch).
+    sensitive_guard=True -> i prompt verso Gemini passano il privacy
+    guardrail (le chiamate CRM/outreach devono attivarlo).
     """
     p = (provider or get_active_provider()).lower()
 
     if p == "gemini":
-        data = _call_gemini_json(system_prompt, user_prompt, api_key=api_key, model=model, timeout=timeout)
+        data = _call_gemini_json(system_prompt, user_prompt, api_key=api_key,
+                                 model=model, timeout=timeout,
+                                 expect_array=expect_array,
+                                 gen_config_extra=gen_config_extra,
+                                 sensitive_guard=sensitive_guard)
         if data is not None:
             return data, "gemini"
         # Fallback automatico a Ollama se disponibile e non disabilitato
@@ -335,27 +378,127 @@ def generate_json_completion(
                   flush=True)
         elif ollama_available():
             print("[llm] Gemini non riuscito -> fallback su Ollama", flush=True)
-            data = _call_ollama_json(system_prompt, user_prompt, model=model, timeout=timeout)
+            data = _call_ollama_json(system_prompt, user_prompt, model=model,
+                                     timeout=timeout, expect_array=expect_array,
+                                     temperature=temperature)
             if data is not None:
                 return data, "ollama"
         return None, "failed"
     else:
-        data = _call_ollama_json(system_prompt, user_prompt, model=model, timeout=timeout)
+        data = _call_ollama_json(system_prompt, user_prompt, model=model,
+                                 timeout=timeout, expect_array=expect_array,
+                                 temperature=temperature)
         if data is not None:
             return data, "ollama"
         # Fallback automatico a Gemini se configurato
         if gemini_available(api_key):
             print("[llm] Ollama non riuscito -> fallback su Gemini", flush=True)
-            data = _call_gemini_json(system_prompt, user_prompt, api_key=api_key, model=model, timeout=timeout)
+            data = _call_gemini_json(system_prompt, user_prompt, api_key=api_key,
+                                     model=model, timeout=timeout,
+                                     expect_array=expect_array,
+                                     gen_config_extra=gen_config_extra,
+                                     sensitive_guard=sensitive_guard)
             if data is not None:
                 return data, "gemini"
         return None, "failed"
 
 
+BATCH_TRIAGE_PROMPT = f"""Sei il Triage Analyst di un produttore europeo di cavi speciali in fibra ottica e rame.
+{AZIENDA}
+
+SCOPO: scrematura massiva (triage) di segnali pubblici. Devi decidere quali meritano un'analisi commerciale approfondita (deep-dive).
+
+PROMUOVI (score >= 65) SOLO:
+- Gare/bandi/accordi quadro con fornitura o posa di cavi speciali (fibra ottica, rame dati, ferroviario, navale, avio/difesa, data center).
+- Aggiudicazioni o commesse vinte da EPC, OEM, General Contractor, System Integrator che dovranno acquistare cavi per eseguire i lavori.
+- Avvio di cantieri o progetti infrastrutturali europei (data center, FTTH, linee ferroviarie, navi, programmi difesa) con fabbisogno cavi identificabile.
+
+SCARTA (score < 65):
+- Notizie puramente finanziarie, sindacali, di cronaca, politica o reputazionali senza commessa o gara attiva.
+- Cavi civili/edilizia standard (impianti domestici, energia bassa tensione commodity) fuori dai settori core.
+- Segnali fuori Europa o senza target commerciale identificabile.
+
+Rispondi ESCLUSIVAMENTE con un array JSON valido (un oggetto per ogni id ricevuto, nessun testo extra):
+[{{"id": <int>, "score": <int 0-100>, "settore": "<Data Center|Telecom/Provider|Ferroviario|Navale/Offshore|Avio/Difesa|Altro>", "scartato_motivo": "<motivo sintetico in italiano se score < 65, altrimenti null>"}}]
+"""
+
+
+def score_opportunities_batch(items: list[dict],
+                              provider: str | None = None) -> list[dict] | None:
+    """Fase 1 (triage): valuta N opportunita' con UNA sola chiamata LLM.
+
+    items: righe DB con chiavi id, source, title, text.
+    Ritorna una lista di {id, score, sector, discard_reason, scored_by}.
+    Gli id assenti nella risposta non vengono inclusi: il chiamante li lascia
+    PENDING per il run successivo. Ritorna None se la chiamata o il parsing
+    falliscono (il chiamante applica il fallback euristico sul batch).
+    """
+    if not items:
+        return []
+    p = (provider or get_active_provider()).lower()
+    payload = [
+        {
+            "id": int(it["id"]),
+            "fonte": (it.get("source") or "").upper(),
+            "titolo": it.get("title") or "",
+            "testo": (it.get("text") or "")[:BATCH_SNIPPET_MAX_CHARS],
+        }
+        for it in items
+    ]
+    user_prompt = (
+        "TRIAGE BATCH: valuta i seguenti segnali e rispondi SOLO con l'array "
+        "JSON nel formato indicato (un oggetto per ogni id).\n\n"
+        + json.dumps(payload, ensure_ascii=False)
+    )
+    data, used = generate_json_completion(
+        BATCH_TRIAGE_PROMPT, user_prompt, provider=p,
+        model=(GEMINI_BATCH_MODEL or None) if p == "gemini" else None,
+        expect_array=True, temperature=0.1,
+        # Niente response_mime_type: l'Interactions API lo rifiuta (HTTP 400).
+        # Il prompt chiede gia' un array JSON puro e _JSON_ARRAY_RE lo estrae.
+        gen_config_extra={"temperature": 0.1},
+    )
+    if data is None:
+        return None
+    if isinstance(data, dict):
+        # Il modello ha incapsulato l'array in un oggetto: estrailo
+        data = next((v for v in data.values() if isinstance(v, list)), None)
+    if not isinstance(data, list):
+        return None
+
+    valid_ids = {int(it["id"]) for it in items}
+    results = []
+    for r in data:
+        if not isinstance(r, dict):
+            continue
+        try:
+            rid = int(r.get("id"))
+        except (TypeError, ValueError):
+            continue
+        if rid not in valid_ids:
+            continue  # id estraneo/allucinato: ignorato
+        try:
+            score = int(r.get("score", 0) or 0)
+        except (TypeError, ValueError):
+            score = 0
+        results.append({
+            "id": rid,
+            "score": max(0, min(100, score)),
+            "sector": normalize_sector(r.get("settore") or r.get("sector")),
+            "discard_reason": (r.get("scartato_motivo")
+                               or r.get("discard_reason")),
+            "scored_by": f"{used}_batch",
+        })
+    return results
+
+
 def _score_llm(title: str, text: str, country_hint: str | None = None,
-               provider: str | None = None) -> dict | None:
+               provider: str | None = None,
+               sensitive_guard: bool = False) -> dict | None:
     prompt = f"TITOLO: {title}\nPAESE_SUGGERITO: {country_hint or 'sconosciuto'}\n\nTESTO:\n{text[:2500]}"
-    data, scored_by = generate_json_completion(SYSTEM_PROMPT, prompt, provider=provider)
+    data, scored_by = generate_json_completion(
+        SYSTEM_PROMPT, prompt, provider=provider,
+        sensitive_guard=sensitive_guard)
     if not data:
         return None
 
@@ -364,7 +507,7 @@ def _score_llm(title: str, text: str, country_hint: str | None = None,
 
     return {
         "score": max(0, min(100, int(data.get("score", 0)))),
-        "sector": data.get("sector") or "Altro",
+        "sector": normalize_sector(data.get("sector")),
         "target_company": data.get("target_company"),
         "country": c,
         "area_manager": area,
@@ -442,7 +585,7 @@ def _score_heuristic(title: str, text: str, country_hint: str | None = None) -> 
                                      "catenaria", "catenary", "metropolitana", "tram"]):
         sector = "Ferroviario"
     elif any(k in haystack for k in ["naval", "shipyard", "fincantieri", "nave", "sommergibile", "marina militare"]):
-        sector = "Navale"
+        sector = "Navale/Offshore"
     elif any(k in haystack for k in ["aerospace", "difesa", "defense", "avio", "aeronaut", "leonardo"]):
         sector = "Avio/Difesa"
     elif any(k in haystack for k in ["telecom", "ftth", "5g", "fibra ottica", "provider", "open fiber", "fibercop"]):
@@ -472,13 +615,52 @@ def _score_heuristic(title: str, text: str, country_hint: str | None = None) -> 
     }
 
 
-def heuristic_prescore(title: str, text: str, country_hint: str | None = None) -> int:
-    """Score euristico rapido (nessuna chiamata LLM) per ordinare la coda."""
-    return _score_heuristic(title, text, country_hint).get("score", 0)
+def compute_heuristic_score(item: dict) -> int:
+    """Prescore euristico a 4 livelli (nessuna chiamata LLM).
+
+    Livello 1: base legata alla fonte (SOURCE_BASE_SCORE).
+    Livello 2: bonus/malus da keyword pesate (POSITIVE/NEGATIVE_KEYWORDS).
+    Livello 3: bonus co-occorrenza Attore/Settore x Evento di commessa.
+    Livello 4: malus extra-UE, condizionato all'assenza di player europei.
+
+    item: dict/row con chiavi source, title, text. Il risultato puo' essere
+    negativo: sotto HEURISTIC_HARD_DISCARD il chiamante scarta il record
+    senza consumare quota LLM.
+    """
+    source = (item.get("source") or "news").lower()
+    text_blob = f"{item.get('title', '')} {item.get('text', '')}".lower()
+
+    score = SOURCE_BASE_SCORE.get(source, 0)
+
+    for kw, weight in POSITIVE_KEYWORDS.items():
+        if kw in text_blob:
+            score += weight
+    for kw, penalty in NEGATIVE_KEYWORDS.items():
+        if kw in text_blob:
+            score += penalty  # penalty gia' negativo
+
+    # Livello 4: notizie extra-UE non pertinenti (salvate dai player europei)
+    if (any(t in text_blob for t in EXTRA_EU_TERMS)
+            and not any(g in text_blob for g in EU_PLAYER_GUARD)):
+        score += EXTRA_EU_PENALTY
+
+    # Livello 3: bonus co-occorrenza Chi/Dove x Cosa succede
+    if (any(a in text_blob for a in COMBO_ACTORS)
+            and any(t in text_blob for t in COMBO_TRIGGERS)):
+        score += COMBO_BONUS
+
+    return score
+
+
+def heuristic_prescore(item: dict) -> int:
+    """Prescore euristico rapido (nessuna chiamata LLM) per ordinare la
+    coda triage e applicare il pre-scarto deterministico."""
+    return compute_heuristic_score(item)
 
 
 def score_opportunity(title: str, text: str, country_hint: str | None = None,
-                      provider: str | None = None) -> dict:
+                      provider: str | None = None,
+                      sensitive_guard: bool = False) -> dict:
     """Scoring con LLM (Ollama o Gemini) se disponibile, altrimenti euristico.
 
     Ottimizzazione CPU: se l'euristica identifica subito l'articolo come rumore
@@ -489,6 +671,7 @@ def score_opportunity(title: str, text: str, country_hint: str | None = None,
     if quick.get("score", 0) == 0 and quick.get("scored_by") == "heuristic_filtered":
         return quick
 
-    result = _score_llm(title, text, country_hint, provider=provider)
+    result = _score_llm(title, text, country_hint, provider=provider,
+                        sensitive_guard=sensitive_guard)
     return result if result else quick
 

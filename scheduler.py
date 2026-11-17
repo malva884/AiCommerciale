@@ -25,9 +25,14 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 SCHEDULE_TIME = os.environ.get("NIGHTLY_SCHEDULE_TIME", "01:00")
+MORNING_DIGEST_TIME = os.environ.get("MORNING_REPORT_TIME",
+                                     config.MORNING_REPORT_TIME)
 RUN_ON_STARTUP_IF_EMPTY = os.environ.get("RUN_ON_STARTUP_IF_EMPTY", "1").lower() in ("1", "true", "yes")
 
 _job_lock = threading.Lock()
+_digest_lock = threading.Lock()
+_monitor_lock = threading.Lock()
+_radar_lock = threading.Lock()
 
 
 def _load_llm_settings_from_db():
@@ -96,6 +101,108 @@ def job():
         _job_lock.release()
 
 
+def morning_digest_job():
+    """Digest email commerciale del mattino (lun-ven): protetto da lock
+    dedicato per non interferire con la pipeline notturna. Errori SMTP
+    e imprevisti finiscono in fetch_errors con source='notifier'."""
+    if not _digest_lock.acquire(blocking=False):
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+              "DIGEST SALTATO: invio precedente ancora in corso.", flush=True)
+        return
+    try:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+              "AVVIO DIGEST EMAIL MATTUTINO", flush=True)
+        import notifier
+        report = notifier.run_morning_digest()
+        sent = sum(1 for r in report if r["status"] == "SENT")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+              f"DIGEST COMPLETATO: {sent} email inviate, "
+              f"{len(report) - sent} regole senza invio.", flush=True)
+    except Exception as exc:
+        print(f"ERRORE durante il digest mattutino: {exc}",
+              file=sys.stderr, flush=True)
+        db.log_error("notifier", target="digest mattutino",
+                     error_type=type(exc).__name__, message=str(exc))
+    finally:
+        _digest_lock.release()
+
+
+def contact_monitor_job():
+    """Job Change Monitoring settimanale: verifica i referenti ACTIVE il cui
+    intervallo e' scaduto (15 gg top account / 30 gg standard) e scatena le
+    azioni a catena (champion tracking, backfill, alert eventi)."""
+    if not _monitor_lock.acquire(blocking=False):
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+              "CONTACT MONITOR SALTATO: run precedente in corso.", flush=True)
+        return
+    try:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+              "AVVIO JOB CHANGE MONITORING", flush=True)
+        import contact_monitor
+        rep = contact_monitor.run_monitor_batch(limit=200)
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+              f"MONITOR COMPLETATO: {rep['checked']} verificati, "
+              f"{len(rep['events'])} eventi, "
+              f"{rep['skipped']} saltati.", flush=True)
+    except Exception as exc:
+        print(f"ERRORE durante il contact monitoring: {exc}",
+              file=sys.stderr, flush=True)
+        db.log_error("contact_monitor", target="scheduler settimanale",
+                     error_type=type(exc).__name__, message=str(exc))
+    finally:
+        _monitor_lock.release()
+
+
+def oem_radar_job():
+    """Radar Commesse Madre giornaliero: scansiona la watchlist OEM/Tier-0
+    via Google News RSS + Search API, conferma LLM, alert al Key Account."""
+    if not _radar_lock.acquire(blocking=False):
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+              "OEM RADAR SALTATO: run precedente in corso.", flush=True)
+        return
+    try:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+              "AVVIO OEM RADAR", flush=True)
+        import oem_tier_radar
+        rep = oem_tier_radar.run_radar(days=30)
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+              f"RADAR: {rep['scanned']} OEM, {rep['new_alerts']} nuovi "
+              f"alert, {rep['errors']} errori.", flush=True)
+    except Exception as exc:
+        print(f"ERRORE OEM radar: {exc}", file=sys.stderr, flush=True)
+        db.log_error("oem_radar", target="scheduler",
+                     error_type=type(exc).__name__, message=str(exc))
+    finally:
+        _radar_lock.release()
+
+
+def news_intel_job():
+    """News Intelligence settimanale: segnali 90gg + gancio outreach sui
+    dossier Company Intelligence e i prospect qualificati. Include la
+    Tier1/2 Discovery dei cablisti europei (richiede Search API)."""
+    if not _radar_lock.acquire(blocking=False):
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+              "NEWS INTEL SALTATO: run precedente in corso.", flush=True)
+        return
+    try:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+              "AVVIO NEWS INTELLIGENCE + TIER DISCOVERY", flush=True)
+        import news_intelligence as ni
+        import oem_tier_radar
+        rep1 = ni.batch_update_companies(ni.collect_targets(limit=40))
+        print(f"  [news_intel] {rep1['companies']} aziende, "
+              f"{rep1['signals']} segnali salvati", flush=True)
+        rep2 = oem_tier_radar.discover_tier_suppliers()
+        print(f"  [tier_disc] {rep2['new_prospects']} nuovi prospect "
+              f"({rep2['skipped_erp']} esclusi gia' clienti ERP)", flush=True)
+    except Exception as exc:
+        print(f"ERRORE news intelligence: {exc}", file=sys.stderr, flush=True)
+        db.log_error("news_intel", target="scheduler",
+                     error_type=type(exc).__name__, message=str(exc))
+    finally:
+        _radar_lock.release()
+
+
 def main():
     print(f"[Scheduler] Avviato worker background.", flush=True)
     print(f"[Scheduler] Orario schedulato ogni notte: {SCHEDULE_TIME}", flush=True)
@@ -111,6 +218,29 @@ def main():
         job()
 
     schedule.every().day.at(SCHEDULE_TIME).do(job)
+
+    # Digest email commerciale: lunedi-venerdi' al mattino
+    print(f"[Scheduler] Digest email Lun-Ven ore {MORNING_DIGEST_TIME}",
+          flush=True)
+    for _wd in (schedule.every().monday, schedule.every().tuesday,
+                schedule.every().wednesday, schedule.every().thursday,
+                schedule.every().friday):
+        _wd.at(MORNING_DIGEST_TIME).do(morning_digest_job)
+
+    # Job Change Monitoring referenti: domenica mattina presto.
+    # La cadenza 15/30 gg per contatto e' gestita da monitor_interval_days.
+    print("[Scheduler] Job Change Monitoring: domenica ore 04:30", flush=True)
+    schedule.every().sunday.at("04:30").do(contact_monitor_job)
+
+    # OEM Radar Commesse Madre: ogni giorno alle 05:00.
+    print("[Scheduler] OEM Radar Commesse Madre: ogni giorno ore 05:00",
+          flush=True)
+    schedule.every().day.at("05:00").do(oem_radar_job)
+
+    # News Intelligence + Tier1/2 cablisti discovery: domenica 05:30.
+    print("[Scheduler] News Intel + Tier1/2 Discovery: domenica ore 05:30",
+          flush=True)
+    schedule.every().sunday.at("05:30").do(news_intel_job)
 
     while True:
         schedule.run_pending()

@@ -5,12 +5,14 @@ l'appalto dovra' comprare i cavi per realizzarlo.
 Richiede TED_API_KEY come fetch_ted; senza chiave ritorna lista vuota.
 """
 import os
+from datetime import date
 
 import requests
 
 import db
 from config import (TED_API_URL, TED_COUNTRIES, TED_CPV_CODES,
-                    TED_KEYWORDS, TED_MAX_RESULTS, COUNTRY_TO_AREA)
+                    TED_KEYWORDS, TED_MAX_RESULTS, COUNTRY_TO_AREA,
+                    MAX_SIGNAL_AGE_DAYS)
 from fetchers.ted import _flatten
 
 
@@ -68,8 +70,16 @@ def fetch_ted_awards(verbose: bool = True) -> list[dict]:
         return []
 
     items = []
+    today = date.today()
     for notice in notices:
         pub_num = notice.get("publication-number", "")
+        # Oltre MAX_SIGNAL_AGE_DAYS il vincitore ha gia' acquistato: scarta.
+        pub_date = str(notice.get("publication-date") or "")[:10]
+        try:
+            if (today - date.fromisoformat(pub_date)).days > MAX_SIGNAL_AGE_DAYS:
+                continue
+        except ValueError:
+            pass  # data non interpretabile: non scartare
         winners = _flatten(notice.get("winner-name"))
         country = _flatten(notice.get("place-of-performance-country-lot"))
         if not country or len(country) != 3:

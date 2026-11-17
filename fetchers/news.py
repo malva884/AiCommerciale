@@ -1,12 +1,14 @@
 """Fetch news da Google News RSS: fonte pubblica, nessuna chiave API."""
 import re
 import urllib.parse
+from datetime import datetime, timezone
 from html import unescape
 
 import feedparser
 
 import db
-from config import NEWS_EDITIONS, MAX_NEWS_PER_QUERY
+from config import (NEWS_EDITIONS, MAX_NEWS_PER_QUERY,
+                    NEWS_RECENCY_DAYS, MAX_SIGNAL_AGE_DAYS)
 
 
 def _clean_summary(raw: str) -> str:
@@ -19,7 +21,8 @@ _RSS = "https://news.google.com/rss/search?q={q}&hl={hl}&gl={gl}&ceid={ceid}"
 
 
 def _feed_url(query: str, lang: str, country: str) -> str:
-    q = urllib.parse.quote(query)
+    # when:Nd: Google restituisce solo notizie degli ultimi N giorni.
+    q = urllib.parse.quote(f"{query} when:{NEWS_RECENCY_DAYS}d")
     ceid = f"{country}:{lang}"
     return _RSS.format(q=q, hl=lang, gl=country, ceid=ceid)
 
@@ -68,6 +71,12 @@ def _fetch_query(query: str, lang: str, country: str,
         if not link or link in seen:
             continue
         seen.add(link)
+        # Filtro freschezza: oltre MAX_SIGNAL_AGE_DAYS il segnale non entra nel DB.
+        pub = entry.get("published_parsed")
+        if pub is not None:
+            pub_dt = datetime(*pub[:6], tzinfo=timezone.utc)
+            if (datetime.now(timezone.utc) - pub_dt).days > MAX_SIGNAL_AGE_DAYS:
+                continue
         country_code = "ITA" if country == "IT" else None
         area_code = "ITALY" if country == "IT" else None
         results.append({

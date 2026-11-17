@@ -24,6 +24,7 @@ from config import AZIENDA, COUNTRY_TO_AREA
 from crm_analyzer import (get_suggested_cable_solution,
                           normalize_company_name)
 from llm import generate_json_completion, is_llm_available
+from privacy_masker import PrivacyMasker, scrub_text
 
 # ==============================================================================
 # DATABASE PROSPECT EUROPEI (LOOKALIKE PROSPECTING)
@@ -637,9 +638,12 @@ def generate_multilingual_outreach(
     scraped_context: str = "",
     source_type: str = "",
     area_manager: str = "",
+    outreach_hook: str = "",
 ) -> dict:
     """Genera bozze email, LinkedIn e script telefonico personalizzati.
-    scraped_context: estratto reale dal sito del prospect (pre-outreach)."""
+    scraped_context: estratto reale dal sito del prospect (pre-outreach).
+    outreach_hook: gancio personalizzato da News Intelligence (segnale
+    commerciale recente <90gg) da usare nell'apertura."""
     lang = language.lower() if language.lower() in OUTREACH_PROMPTS else "it"
     prompt_cfg = OUTREACH_PROMPTS[lang]
 
@@ -649,25 +653,44 @@ def generate_multilingual_outreach(
         "area_manager_assegnato": area_manager or area_for_country(country),
     }
 
+    # --- Data masking: la ragione sociale non lascia la macchina ---
+    # Vault effimero per questa singola generazione: il prompt usa solo il
+    # token e la risposta viene re-idratata localmente prima del return.
+    masker = PrivacyMasker()
+    company_tok = masker.mask_entity(company_name, "CLIENTE")
+    # Il contesto scraped (sito pubblico) puo' contenere email/telefoni/
+    # importi: pulizia irreversibile prima che finisca nel prompt.
+    safe_context = scrub_text(scraped_context)
+
     user_context = (
-        f"AZIENDA TARGET: {company_name}\n"
+        f"AZIENDA TARGET: {company_tok}\n"
         f"PAESE: {country}\n"
         f"SETTORE CORE: {sector}\n"
         f"FONTE DEL LEAD: {source_type or 'n/d'}\n"
         f"PROGETTO O COMMESSA RILEVATA: {specific_project or 'Progetti e cantieri in corso nel mercato'}\n"
         f"GAMMA CAVI DI INTERESSE: {cable_focus or 'Fibra ottica ad alta densità G.657.A1 / Rame CPR B2ca / Cavi speciali'}\n"
+        f"IMPORTANTE: usa il segnaposto {company_tok} ogni volta che devi "
+        f"citare l'azienda target nella bozza.\n"
     )
-    if scraped_context:
+    if safe_context:
         user_context += (f"CONTESTO ESTRATTO DAL SITO UFFICIALE DEL PROSPECT:\n"
-                         f"{scraped_context[:2000]}\n")
+                         f"{safe_context[:2000]}\n")
+    if outreach_hook and outreach_hook.strip():
+        user_context += (
+            f"GANCIO OUTREACH (segnale news recente dell'azienda — "
+            f"usalo per aprire l'email in modo naturale e specifico):\n"
+            f"{outreach_hook.strip()[:400]}\n")
+        extras["outreach_hook"] = outreach_hook.strip()[:400]
 
     if is_llm_available(provider) and company_name.strip():
         data, used_p = generate_json_completion(
             prompt_cfg["system"],
             user_context,
-            provider=provider
+            provider=provider,
+            sensitive_guard=True,
         )
         if data and "email_body" in data and "subject" in data:
+            data = masker.unmask_result(data)  # re-idratazione solo locale
             data["generated_by"] = used_p
             data.update(extras)
             return data

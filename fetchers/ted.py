@@ -5,6 +5,7 @@ Richiede API key gratuita (registrazione su https://ted.europa.eu):
 Senza chiave la funzione ritorna lista vuota senza bloccare la pipeline.
 """
 import os
+from datetime import date
 
 import requests
 
@@ -26,6 +27,15 @@ def _flatten(value) -> str:
     if isinstance(value, list):
         return " | ".join(p for p in (_flatten(v) for v in value) if p)
     return str(value) if value else ""
+
+
+def _past_deadline(deadline: str) -> bool:
+    """True se la scadenza offerta (YYYY-MM-DD...) e' gia' passata.
+    Non interpretabile -> False: non scartiamo cio' che non possiamo verificare."""
+    try:
+        return date.fromisoformat(str(deadline).strip()[:10]) < date.today()
+    except (ValueError, TypeError):
+        return False
 
 
 def fetch_ted(verbose: bool = True) -> list[dict]:
@@ -82,6 +92,10 @@ def fetch_ted(verbose: bool = True) -> list[dict]:
     items = []
     for notice in notices:
         pub_num = notice.get("publication-number", "")
+        # Solo bandi con scadenza futura: oltre la deadline non si puo' offrire.
+        deadline = _flatten(notice.get("deadline-receipt-tender-date-lot"))
+        if _past_deadline(deadline):
+            continue
         country = _flatten(notice.get("place-of-performance-country-lot"))
         if not country or len(country) != 3:
             # fallback: cerca country di 3 lettere nel testo
@@ -101,8 +115,7 @@ def fetch_ted(verbose: bool = True) -> list[dict]:
                 f"Paese lavori: {country}" if country else "",
                 _flatten(notice.get("description-proc")),
                 _flatten(notice.get("description-lot")),
-                "Scadenza: " + _flatten(
-                    notice.get("deadline-receipt-tender-date-lot")),
+                "Scadenza: " + deadline,
             ])),
         })
     return items

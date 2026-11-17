@@ -60,6 +60,13 @@ def fetch_raw_orders(limit: Optional[int] = None) -> pd.DataFrame:
         return pd.DataFrame()
     engine = get_engine()
     top_clause = f"TOP {int(limit)} " if limit else ""
+    # Data minimization (privacy policy ERP->LLM):
+    # si selezionano SOLO le colonne necessarie ai calcoli locali (MTBO,
+    # periodo ordini, fascia fatturato, categorie prodotto). Le colonne
+    # finanziarie sensibili presenti su AGG_MASTER_CLIENTE - costo
+    # industriale, margine, sconti extra-fattura, condizioni di pagamento -
+    # NON vengono lette. O.Valore serve al bucketing in Tier e non lascia
+    # mai la macchina in forma puntuale.
     query = f"""
         SELECT {top_clause}
             LTRIM(RTRIM(O.cdCliente))            AS client_id,
@@ -123,4 +130,45 @@ def fetch_clients_list() -> pd.DataFrame:
             return pd.read_sql_query(text(query), con=conn)
     except Exception as e:
         logger.error(f"Errore lettura clienti da SQL Server: {e}")
+        return pd.DataFrame()
+
+
+def fetch_client_history(client_id: str) -> pd.DataFrame:
+    """Storico ordini di UN solo cliente ERP (Company Intelligence on-demand).
+
+    Colonne: order_code, product_code, product_description, material_code,
+    product_category, qty_ordered, order_date, amount.
+    DataFrame vuoto se ERP non configurato / errore."""
+    if not SQLSERVER_PWD or not client_id:
+        return pd.DataFrame()
+    engine = get_engine()
+    query = """
+        SELECT
+            LTRIM(RTRIM(O.cdOrdine))            AS order_code,
+            LTRIM(RTRIM(O.cdProdotto))          AS product_code,
+            LTRIM(RTRIM(ISNULL(P.cdMateriale,''))) AS material_code,
+            LTRIM(RTRIM(ISNULL(P.dsProdotto,'')))  AS product_description,
+            ISNULL(O.QtaOrdinata, 0)            AS qty_ordered,
+            CAST(O.dtOrdine AS DATE)            AS order_date,
+            ISNULL(O.Valore, 0.0)               AS amount
+        FROM [AGG_MASTER_CLIENTE] O WITH (NOLOCK)
+        LEFT JOIN [AGG_PRODOTTI_TMP] P WITH (NOLOCK)
+               ON P.cdProdotto = O.cdProdotto
+        WHERE O.cdCliente = :cid AND O.dtOrdine IS NOT NULL
+        ORDER BY O.dtOrdine DESC
+    """
+    try:
+        with engine.connect() as conn:
+            df = pd.read_sql_query(text(query), con=conn,
+                                   params={"cid": str(client_id).strip()})
+        if df.empty:
+            return df
+        df["order_date"] = pd.to_datetime(df["order_date"])
+        df["product_category"] = df["material_code"].astype(str).map(
+            lambda c: MATERIAL_CATEGORY_MAP.get(c.strip(),
+                                                "Altro / Accessori"))
+        return df
+    except Exception as e:
+        logger.error(f"Errore lettura storico cliente {client_id} "
+                     f"da SQL Server: {e}")
         return pd.DataFrame()
